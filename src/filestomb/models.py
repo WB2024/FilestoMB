@@ -47,6 +47,7 @@ class Album:
     catalog_number: str | None = None
     barcode: str | None = None
     tracks: list[Track] = field(default_factory=list)
+    cover_art_path: Path | None = None
 
 
 @dataclass

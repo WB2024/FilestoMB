@@ -11,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, OptionList, Static
 from textual.widgets.option_list import Option
 
+from .. import coverart
 from ..mb import seed
 from ..models import Album, EntityType, MatchResult, MatchStatus
 from ..widgets.login_status import LoginStatus
@@ -42,6 +43,7 @@ class SubmitScreen(Screen):
     BINDINGS = [
         ("escape", "app.pop_screen", "Back"),
         ("a", "add_to_collection", "Add to collection"),
+        ("c", "add_cover_art", "Add cover art"),
     ]
 
     def __init__(self, album: Album, matches: dict[EntityType, MatchResult]) -> None:
@@ -76,7 +78,21 @@ class SubmitScreen(Screen):
             )
             yield Button("Add release to a collection [a]", id="add-to-collection-button")
             yield OptionList(id="collections-list")
+
+            yield Static(self._cover_art_line(), id="cover-art-status")
+            yield Button("Add cover art [c]", id="cover-art-button")
         yield Footer()
+
+    def _cover_art_line(self) -> str:
+        if self.album.cover_art_path:
+            return (
+                f"Cover art ready: [b]{self.album.cover_art_path}[/b] -- MusicBrainz has no upload "
+                "API, so this opens the real upload page and reveals the file for you to drag in."
+            )
+        return (
+            "No local cover art found (no cover.jpg/folder.png etc., and nothing embedded in the "
+            "tags). You can still open the upload page and add one manually."
+        )
 
     def _line(self, entity_type: EntityType, result: MatchResult | None) -> str:
         label = ENTITY_LABELS[entity_type]
@@ -93,9 +109,34 @@ class SubmitScreen(Screen):
         button_id = event.button.id or ""
         if button_id == "add-to-collection-button":
             self.action_add_to_collection()
+        elif button_id == "cover-art-button":
+            self.action_add_cover_art()
         elif button_id.startswith("create-"):
             entity_type = EntityType(button_id.removeprefix("create-"))
             self._open_seed_form(entity_type)
+
+    def action_add_cover_art(self) -> None:
+        release_mbid = self._selected_mbid(EntityType.RELEASE)
+        if not release_mbid:
+            self.notify(
+                "This release has no MusicBrainz ID yet -- match or create it first.",
+                severity="warning",
+            )
+            return
+
+        webbrowser.open(f"https://musicbrainz.org/release/{release_mbid}/cover-art-upload")
+
+        if self.album.cover_art_path:
+            self.notify(
+                f"Opened the cover art upload page. Drag in: {self.album.cover_art_path}",
+                timeout=10,
+            )
+            coverart.reveal_in_file_manager(self.album.cover_art_path)
+        else:
+            self.notify(
+                "Opened the cover art upload page. No local cover art was found to suggest.",
+                severity="warning",
+            )
 
     def action_add_to_collection(self) -> None:
         release_mbid = self._selected_mbid(EntityType.RELEASE)

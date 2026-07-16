@@ -201,3 +201,63 @@ async def test_submit_screen_opens_release_details_then_seed_form(tmp_path: Path
         assert 'name="events.0.country" value="GB"' in html
     await app.mb_client.aclose()
     await app.oauth.aclose()
+
+
+async def test_add_cover_art_opens_upload_page_and_reveals_file(tmp_path: Path, monkeypatch) -> None:
+    opened_urls = []
+    revealed_paths = []
+    monkeypatch.setattr("filestomb.screens.submit.webbrowser.open", opened_urls.append)
+    monkeypatch.setattr("filestomb.screens.submit.coverart.reveal_in_file_manager", revealed_paths.append)
+
+    cover_path = tmp_path / "cover.png"
+    cover_path.write_bytes(b"fake-png-bytes")
+    album = Album(directory=tmp_path, title="Test Album", artist="Test Artist", cover_art_path=cover_path)
+    matches = {
+        EntityType.RELEASE: MatchResult(
+            entity_type=EntityType.RELEASE,
+            query="Test Album",
+            status=MatchStatus.MATCHED,
+            selected_mbid="release-1",
+        ),
+    }
+
+    app = FilesToMBApp(start_path=tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(SubmitScreen(album, matches))
+        await pilot.pause()
+        submit_screen = app.screen
+        assert isinstance(submit_screen, SubmitScreen)
+
+        submit_screen.action_add_cover_art()
+        await pilot.pause()
+
+        assert opened_urls == ["https://musicbrainz.org/release/release-1/cover-art-upload"]
+        assert revealed_paths == [cover_path]
+    await app.mb_client.aclose()
+    await app.oauth.aclose()
+
+
+async def test_add_cover_art_without_release_mbid_warns(tmp_path: Path, monkeypatch) -> None:
+    opened_urls = []
+    monkeypatch.setattr("filestomb.screens.submit.webbrowser.open", opened_urls.append)
+
+    album = Album(directory=tmp_path, title="Test Album", artist="Test Artist")
+    matches = {
+        EntityType.RELEASE: MatchResult(
+            entity_type=EntityType.RELEASE, query="Test Album", status=MatchStatus.MISSING
+        ),
+    }
+
+    app = FilesToMBApp(start_path=tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(SubmitScreen(album, matches))
+        await pilot.pause()
+        submit_screen = app.screen
+        assert isinstance(submit_screen, SubmitScreen)
+
+        submit_screen.action_add_cover_art()
+        await pilot.pause()
+
+        assert opened_urls == []
+    await app.mb_client.aclose()
+    await app.oauth.aclose()

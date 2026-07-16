@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 from filestomb import tags
+
+FFMPEG = shutil.which("ffmpeg")
 
 
 def test_scan_directory_reads_album_from_tracks(make_flac, tmp_path: Path) -> None:
@@ -52,6 +56,26 @@ def test_scan_directory_reads_album_from_tracks(make_flac, tmp_path: Path) -> No
     for track in album.tracks:
         assert track.length_ms is not None
         assert 0 < track.length_ms < 2000
+
+
+def test_scan_directory_picks_up_standalone_cover_art(make_flac, tmp_path: Path) -> None:
+    if FFMPEG is None:
+        import pytest
+
+        pytest.skip("ffmpeg is required for this fixture")
+
+    album_dir = tmp_path / "Album"
+    make_flac({"title": "Song", "artist": "Test Artist", "album": "Test Album"}, directory=album_dir)
+    cover_path = album_dir / "cover.png"
+    subprocess.run(
+        [FFMPEG, "-f", "lavfi", "-i", "color=c=blue:s=8x8", "-frames:v", "1", "-y", str(cover_path), "-loglevel", "error"],
+        check=True,
+    )
+
+    album = tags.scan_directory(album_dir)
+
+    assert album is not None
+    assert album.cover_art_path == cover_path
 
 
 def test_scan_directory_returns_none_when_no_audio(tmp_path: Path) -> None:

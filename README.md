@@ -28,7 +28,9 @@ FilesToMB exists to close that gap: point it at a folder, and let it figure out 
 
 The result: albums that exist perfectly on your disk end up existing perfectly on MusicBrainz too, with a fraction of the manual form-filling.
 
-A deliberate note on that last step: MusicBrainz doesn't expose a public write API for creating artists, labels, release groups, or releases — new entities are only ever created through the ordinary edit forms, submitted by a logged-in human. FilesToMB embraces that rather than fighting it, using MusicBrainz's own documented [seeding mechanism](https://musicbrainz.org/doc/Development/Seeding) to pre-fill those forms instead of pretending there's a one-click API to create them.
+A deliberate note on that last step: MusicBrainz doesn't expose a public write API for creating artists, labels, release groups, or releases — new entities are only ever created through the ordinary edit forms, submitted by a logged-in human. FilesToMB embraces that rather than fighting it, using MusicBrainz's own documented [seeding mechanism](https://musicbrainz.org/doc/Development/Seeding) to pre-fill those forms instead of pretending there's a one-click API to create them. Every seed field name (and, for release groups, the numeric type IDs) is verified against MusicBrainz's own server source rather than guessed, since the docs turned out to describe an older format in places.
+
+Cover art works the same way, one level further: the Cover Art Archive has *no* upload API at all, public or otherwise — even MusicBrainz's own upload page requires a real logged-in browser session (not OAuth2) and then talks to the Internet Archive behind the scenes. So FilesToMB does what it honestly can: find the right image locally (a `cover.jpg`/`folder.png`-style file, or whatever's embedded in the tags), then, once a release has a MusicBrainz ID, open the real upload page and tell you exactly which file to drag in.
 
 ## Features
 
@@ -40,6 +42,8 @@ A deliberate note on that last step: MusicBrainz doesn't expose a public write A
 - **Batch-friendly** — work through a backlog of albums without re-navigating each time.
 - **No credentials needed for the core flow** — searching MusicBrainz and opening seeded "create" forms need no login at all.
 - **Optional MusicBrainz login** — log in with OAuth2 (press `l`) to use the handful of actions MusicBrainz's API *does* support as real authenticated writes, like filing a resolved release into one of your personal collections.
+- **Cover art assistance** — finds a standalone cover file or extracts what's embedded in the tags, then opens MusicBrainz's real upload page with the exact file called out for you to drag in.
+- **Remembers where you left off** — the last directory you browsed to persists between runs, instead of always starting at your home directory.
 
 ## Tech stack
 
@@ -107,13 +111,13 @@ MB_OAUTH_CLIENT_SECRET=your_client_secret
 filestomb /path/to/music/library
 ```
 
-This opens the TUI with the directory browser focused on the given path (or your home directory if omitted).
+This opens the TUI with the directory browser focused on the given path (or the last directory you browsed to, or your home directory the first time).
 
-- Navigate the tree and press **Enter** on an album folder to scan its tags.
+- Navigate the tree and press **Enter** on an album folder to scan its tags. Press **u** to go up a directory, or **g** to jump straight to a typed path.
 - On the review screen, edit any field, press **m** to check MusicBrainz, then use the option lists to pick between ambiguous candidates.
-- Press **c** to continue — for anything still missing, a button opens the matching MusicBrainz "create" form in your browser, pre-filled and ready to submit.
-- Press **l** anywhere to log in: it opens MusicBrainz's authorization page in your browser, and you paste the code it shows you back into the app.
-- Once logged in and a release has a MusicBrainz ID, press **a** on the submit screen to file it into one of your personal collections.
+- Press **c** to continue — for anything still missing, a button opens the matching MusicBrainz "create" form in your browser (release group and release creation first ask for the extra fields MusicBrainz can seed: type, disambiguation, status, language, and so on).
+- Press **l** anywhere to log in: it opens MusicBrainz's authorization page in your browser, and you paste the code it shows you back into the app. A status line on every screen shows whether you're logged in.
+- On the submit screen, once a release has a MusicBrainz ID: press **a** to file it into one of your personal collections (requires login), or **c** to open the cover art upload page — if FilesToMB found a local image, it'll tell you exactly which file to drag in and reveal it in your file manager.
 - **Escape** goes back a screen; **q** quits.
 
 ## Development
@@ -132,9 +136,10 @@ Tests generate real (silent) audio fixtures with `ffmpeg` to exercise actual tag
 - [x] Review screen with in-TUI editing and match selection
 - [x] Seeded-form submission (open missing entities' create forms, in dependency order)
 - [x] OAuth2 login and adding resolved releases to a personal collection
+- [x] Remember recently-used directories, with Up/jump-to-path navigation
+- [x] Cover art detection and upload-page assistance
 - [ ] Per-track editing (track titles/numbers) in the review screen
 - [ ] Batch mode across multiple albums in one session
-- [ ] Remember recently-used directories
 
 ## Contributing
 

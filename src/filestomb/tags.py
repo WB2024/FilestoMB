@@ -7,6 +7,7 @@ from pathlib import Path
 import mutagen
 from mutagen.easyid3 import EasyID3
 
+from . import coverart
 from .models import Album, Track
 
 AUDIO_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wv", ".ape"}
@@ -102,4 +103,5 @@ def scan_directory(directory: Path) -> Album | None:
         catalog_number=catalog_number,
         barcode=barcode,
         tracks=tracks,
+        cover_art_path=coverart.find_or_extract_cover(directory, tracks),
     )

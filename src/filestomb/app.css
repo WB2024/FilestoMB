@@ -71,6 +71,11 @@ LoginStatus {
     color: $text-muted;
 }
 
+#cover-art-status {
+    margin-top: 1;
+    color: $text-muted;
+}
+
 .field-row {
     height: 3;
     margin-bottom: 1;
