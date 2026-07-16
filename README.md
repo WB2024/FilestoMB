@@ -2,7 +2,7 @@
 
 **A beautiful, keyboard-driven TUI for turning your local music collection into MusicBrainz edits.**
 
-> Status: early development. This README describes the project as designed; the codebase is being built out from here.
+> Status: early development. The core flow — browse, read tags, match against MusicBrainz, review, and open seeded edit forms — is implemented and tested; see [Roadmap](#roadmap) for what's next.
 
 ---
 
@@ -20,9 +20,11 @@ FilesToMB exists to close that gap: point it at a folder, and let it figure out 
 2. **Read** — FilesToMB reads the embedded tags from the audio files in that directory to build a picture of the release: artist(s), album/release title, track list, dates, disc/media info, label, catalog number, barcode, and anything else usable.
 3. **Resolve** — for each entity involved (artist, label, release group, release), FilesToMB searches the MusicBrainz API to see what already exists. Confident matches are linked automatically; ambiguous or missing entities are flagged for your attention.
 4. **Review & edit** — everything is presented in the TUI before submission. Fix a mis-tagged field, pick the right match out of several candidates, or fill in something your tags didn't have. Nothing goes to MusicBrainz without passing through this screen.
-5. **Submit** — FilesToMB creates whatever is missing, in the right order (artist and label before release group, release group before release), and submits it as edits under your MusicBrainz account.
+5. **Submit** — for whatever's missing, FilesToMB opens a pre-filled ("seeded") MusicBrainz edit form in your browser, in the right dependency order (label and artist before release group, release group before release), so you just review and click submit while logged in yourself.
 
 The result: albums that exist perfectly on your disk end up existing perfectly on MusicBrainz too, with a fraction of the manual form-filling.
+
+A deliberate note on that last step: MusicBrainz doesn't expose a public write API for creating artists, labels, release groups, or releases — new entities are only ever created through the ordinary edit forms, submitted by a logged-in human. FilesToMB embraces that rather than fighting it, using MusicBrainz's own documented [seeding mechanism](https://musicbrainz.org/doc/Development/Seeding) to pre-fill those forms instead of pretending there's a one-click API to create them.
 
 ## Features
 
@@ -30,46 +32,45 @@ The result: albums that exist perfectly on your disk end up existing perfectly o
 - **Directory-first workflow** — point at a folder, not a spreadsheet.
 - **Entity-aware matching** — artists, labels, release groups, and releases are resolved independently, so a partial match (e.g. artist exists, release doesn't) is handled correctly instead of creating duplicates.
 - **In-TUI editing** — correct or complete metadata before it's submitted, without leaving the app.
-- **Review-before-submit** — a clear diff/preview of exactly what will be created or changed.
-- **Batch-friendly** — work through a backlog of albums without re-authenticating or re-navigating each time.
-- **Bring your own credentials** — MusicBrainz API/OAuth credentials live in a local `.env` file, never in code or config committed to the repo.
+- **Review-before-submit** — a clear status (matched / ambiguous / missing) for every entity, before anything opens in a browser.
+- **Batch-friendly** — work through a backlog of albums without re-navigating each time.
+- **No credentials to protect** — searching MusicBrainz needs no login at all; creating things happens in your own already-authenticated browser session, so there's nothing sensitive in `.env`.
 
-## Tech stack (planned)
+## Tech stack
 
 | Concern | Choice |
 |---|---|
 | TUI framework | [Textual](https://github.com/Textualize/textual) — modern, styleable, keyboard-first Python TUI |
 | Audio tag reading | [Mutagen](https://github.com/quodlibet/mutagen) |
-| MusicBrainz API | Direct HTTP against `musicbrainz.org/ws/2`, OAuth2 for authenticated edits |
-| Config | `python-dotenv` for local `.env` credential loading |
-| Packaging | Python, installable as a CLI entry point |
-
-This may evolve as the project takes shape, but the TUI layer is settled: Textual is the right tool for a "beautiful, keyboard-driven" terminal experience in Python.
+| MusicBrainz search | Async `httpx` client against `musicbrainz.org/ws/2`, rate-limited to MusicBrainz's requested 1 req/sec |
+| MusicBrainz creation | Browser-opened, pre-filled ("seeded") edit forms — see the note above |
+| Config | `python-dotenv` for local `.env` loading |
+| Packaging | `hatchling`, installable as a CLI entry point (`filestomb`) |
 
 ## Getting started
 
-> Not yet published. Once the first working version lands, this section will cover installation via `pip`/`pipx`.
-
 ```bash
-git clone https://github.com/<you>/FilesToMB.git
+git clone git@github.com:WB2024/FilesToMB.git
 cd FilesToMB
-# setup instructions coming soon
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+# edit .env with a real contact email — MusicBrainz requires this on every request
 ```
 
 ## Configuration
 
-MusicBrainz authenticates edits via OAuth2 under your own account rather than a static API key — FilesToMB will guide you through obtaining these once, then stores them locally:
+Searching MusicBrainz needs no authentication — just a descriptive, contactable `User-Agent`, which MusicBrainz requires on every request:
 
 ```env
 # .env
-MB_CLIENT_ID=your_musicbrainz_application_client_id
-MB_CLIENT_SECRET=your_musicbrainz_application_client_secret
 MB_APP_NAME=FilesToMB
 MB_APP_VERSION=0.1.0
 MB_CONTACT=you@example.com
 ```
 
-`.env` is git-ignored by default — your credentials never leave your machine.
+`.env` is git-ignored by default. There's no API key to leak, since creating entities happens through your browser, logged into MusicBrainz as yourself.
 
 ## Usage
 
@@ -77,16 +78,31 @@ MB_CONTACT=you@example.com
 filestomb /path/to/music/library
 ```
 
-This opens the TUI with the file browser focused on the given path (or your home directory if omitted). From there, keyboard shortcuts drive everything: navigating the browser, inspecting a candidate album, reviewing matches, editing fields, and confirming submission.
+This opens the TUI with the directory browser focused on the given path (or your home directory if omitted).
+
+- Navigate the tree and press **Enter** on an album folder to scan its tags.
+- On the review screen, edit any field, press **m** to check MusicBrainz, then use the option lists to pick between ambiguous candidates.
+- Press **c** to continue — for anything still missing, a button opens the matching MusicBrainz "create" form in your browser, pre-filled and ready to submit.
+- **Escape** goes back a screen; **q** quits.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+Tests generate real (silent) audio fixtures with `ffmpeg` to exercise actual tag reading, mock MusicBrainz's HTTP API with `respx`, and drive the real Textual app headlessly through Textual's own test harness — not just unit tests of isolated functions.
 
 ## Roadmap
 
-- [ ] Directory browser + tag reading
-- [ ] MusicBrainz search/match for artist, label, release group, release
-- [ ] Review/diff screen with in-TUI editing
-- [ ] OAuth2 flow + `.env`-based credential storage
-- [ ] Edit submission (create missing entities in dependency order)
-- [ ] Batch mode across multiple albums
+- [x] Directory browser + tag reading
+- [x] MusicBrainz search/match for artist, label, release group, release
+- [x] Review screen with in-TUI editing and match selection
+- [x] Seeded-form submission (open missing entities' create forms, in dependency order)
+- [ ] Per-track editing (track titles/numbers) in the review screen
+- [ ] Batch mode across multiple albums in one session
+- [ ] Remember recently-used directories
 
 ## Contributing
 
