@@ -1,9 +1,11 @@
-"""A small async client for MusicBrainz's read-only search API (ws/2).
+"""An async client for MusicBrainz's ws/2 API: search plus authenticated
+collection management.
 
 MusicBrainz doesn't expose a public write API for creating artists, labels,
 release groups, or releases -- see mb/seed.py for how new entities actually
-get created (browser-based "seeded" edit forms). This client only searches
-for what already exists.
+get created (browser-based "seeded" edit forms). This client covers what
+ws/2 *does* support directly: anonymous search, and -- with an OAuth2
+access token (see mb/oauth.py) -- managing the logged-in user's collections.
 """
 
 from __future__ import annotations
@@ -47,14 +49,35 @@ class MusicBrainzClient:
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
 
-    async def _get(self, path: str, params: dict[str, str | int]) -> dict:
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, str | int] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
         async with self._lock:
             elapsed = time.monotonic() - self._last_request
             if elapsed < MIN_REQUEST_INTERVAL:
                 await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
-            response = await self._client.get(path, params={**params, "fmt": "json"})
+            response = await self._client.request(method, path, params=params, headers=headers)
             self._last_request = time.monotonic()
         response.raise_for_status()
+        return response
+
+    async def _get(self, path: str, params: dict[str, str | int]) -> dict:
+        response = await self._request("GET", path, params={**params, "fmt": "json"})
+        return response.json()
+
+    async def _authenticated_get(
+        self, path: str, params: dict[str, str | int], access_token: str
+    ) -> dict:
+        response = await self._request(
+            "GET",
+            path,
+            params={**params, "fmt": "json"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
         return response.json()
 
     async def search_artist(self, name: str, limit: int = 5) -> list[Candidate]:
@@ -110,3 +133,24 @@ class MusicBrainzClient:
             )
             for item in data.get("releases", [])
         ]
+
+    # -- Authenticated collection actions (require an OAuth2 access token) --
+    # See mb/oauth.py: MusicBrainz has no write API for entities themselves,
+    # but collections/ratings/tags are real, narrower authenticated writes.
+
+    async def list_collections(self, access_token: str, username: str | None = None) -> list[dict]:
+        params: dict[str, str | int] = {}
+        if username:
+            params["editor"] = username
+            params["inc"] = "user-collections"
+        data = await self._authenticated_get("/collection", params, access_token)
+        return data.get("collections", [])
+
+    async def add_release_to_collection(
+        self, collection_mbid: str, release_mbid: str, access_token: str
+    ) -> None:
+        await self._request(
+            "PUT",
+            f"/collection/{collection_mbid}/releases/{release_mbid}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )

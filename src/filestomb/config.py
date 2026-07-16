@@ -16,6 +16,8 @@ class Settings:
     app_version: str
     contact: str
     api_base_url: str
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
 
     @property
     def user_agent(self) -> str:
@@ -27,6 +29,10 @@ class Settings:
     def has_contact(self) -> bool:
         return bool(self.contact.strip())
 
+    @property
+    def has_oauth(self) -> bool:
+        return bool(self.oauth_client_id.strip() and self.oauth_client_secret.strip())
+
 
 def load_settings() -> Settings:
     load_dotenv()
@@ -35,4 +41,6 @@ def load_settings() -> Settings:
         app_version=os.environ.get("MB_APP_VERSION", "0.1.0"),
         contact=os.environ.get("MB_CONTACT", ""),
         api_base_url=os.environ.get("MB_API_BASE_URL", DEFAULT_API_BASE_URL),
+        oauth_client_id=os.environ.get("MB_OAUTH_CLIENT_ID", ""),
+        oauth_client_secret=os.environ.get("MB_OAUTH_CLIENT_SECRET", ""),
     )

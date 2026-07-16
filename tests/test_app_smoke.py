@@ -11,13 +11,24 @@ from textual.widgets import Input, OptionList
 
 from filestomb.app import FilesToMBApp
 from filestomb.screens.browse import BrowseScreen
+from filestomb.screens.login import LoginScreen
 from filestomb.screens.review import ReviewScreen
 from filestomb.screens.submit import SubmitScreen
 
 
 @pytest.fixture(autouse=True)
-def _mb_contact(monkeypatch):
+def _isolated_settings(monkeypatch, tmp_path):
+    # Explicitly set every var config.py reads so these tests are isolated
+    # from whatever real .env (and real OAuth credentials/tokens) happen to
+    # exist on the machine running them -- python-dotenv won't override a
+    # variable that's already set in the environment.
     monkeypatch.setenv("MB_CONTACT", "test@example.com")
+    monkeypatch.setenv("MB_APP_NAME", "FilesToMB-Test")
+    monkeypatch.setenv("MB_APP_VERSION", "0.0.0")
+    monkeypatch.setenv("MB_API_BASE_URL", "https://musicbrainz.org/ws/2")
+    monkeypatch.setenv("MB_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("MB_OAUTH_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
 
 
 async def test_app_boots_to_browse_screen(tmp_path: Path) -> None:

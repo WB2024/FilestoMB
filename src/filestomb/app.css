@@ -19,8 +19,15 @@ Screen {
 }
 
 #review-body,
-#submit-body {
+#submit-body,
+#login-body {
     padding: 1 2;
+}
+
+#login-hint,
+#collections-hint {
+    margin-bottom: 1;
+    color: $text-muted;
 }
 
 .field-row {

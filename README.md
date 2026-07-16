@@ -1,4 +1,8 @@
-# FilesToMB
+<p align="center">
+  <img src="logo.png" alt="FilesToMB logo: a bandage-wrapped mummy clutching a music file, framed in a hieroglyph-carved tomb archway" width="280">
+</p>
+
+<h1 align="center">FilesToMB</h1>
 
 **A beautiful, keyboard-driven TUI for turning your local music collection into MusicBrainz edits.**
 
@@ -34,7 +38,8 @@ A deliberate note on that last step: MusicBrainz doesn't expose a public write A
 - **In-TUI editing** — correct or complete metadata before it's submitted, without leaving the app.
 - **Review-before-submit** — a clear status (matched / ambiguous / missing) for every entity, before anything opens in a browser.
 - **Batch-friendly** — work through a backlog of albums without re-navigating each time.
-- **No credentials to protect** — searching MusicBrainz needs no login at all; creating things happens in your own already-authenticated browser session, so there's nothing sensitive in `.env`.
+- **No credentials needed for the core flow** — searching MusicBrainz and opening seeded "create" forms need no login at all.
+- **Optional MusicBrainz login** — log in with OAuth2 (press `l`) to use the handful of actions MusicBrainz's API *does* support as real authenticated writes, like filing a resolved release into one of your personal collections.
 
 ## Tech stack
 
@@ -44,19 +49,33 @@ A deliberate note on that last step: MusicBrainz doesn't expose a public write A
 | Audio tag reading | [Mutagen](https://github.com/quodlibet/mutagen) |
 | MusicBrainz search | Async `httpx` client against `musicbrainz.org/ws/2`, rate-limited to MusicBrainz's requested 1 req/sec |
 | MusicBrainz creation | Browser-opened, pre-filled ("seeded") edit forms — see the note above |
+| MusicBrainz login | OAuth2 authorization-code flow for an "Installed application", tokens cached locally in `~/.config/filestomb/token.json` |
 | Config | `python-dotenv` for local `.env` loading |
 | Packaging | `hatchling`, installable as a CLI entry point (`filestomb`) |
 
 ## Getting started
 
+For everyday use, install it with [pipx](https://pypa.github.io/pipx/) so a `filestomb` command is available from any directory, without activating a venv:
+
 ```bash
 git clone git@github.com:WB2024/FilesToMB.git
 cd FilesToMB
+pipx install -e .
+cp .env.example .env
+# edit .env with a real contact email — MusicBrainz requires this on every request
+filestomb
+```
+
+Being an editable (`-e`) install, it picks up any code changes immediately — no reinstalling needed.
+
+For development, or if you'd rather not install anything globally:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
-# edit .env with a real contact email — MusicBrainz requires this on every request
+python3 main.py   # or: filestomb, once the venv is activated
 ```
 
 ## Configuration
@@ -70,7 +89,17 @@ MB_APP_VERSION=0.1.0
 MB_CONTACT=you@example.com
 ```
 
-`.env` is git-ignored by default. There's no API key to leak, since creating entities happens through your browser, logged into MusicBrainz as yourself.
+`.env` is git-ignored by default. There's no API key to leak for the core flow, since creating entities happens through your browser, logged into MusicBrainz as yourself.
+
+Logging in (for collections, ratings, tags, etc.) is optional, and needs an OAuth2 "Installed application" registered at [musicbrainz.org/account/applications](https://musicbrainz.org/account/applications):
+
+```env
+# .env
+MB_OAUTH_CLIENT_ID=your_client_id
+MB_OAUTH_CLIENT_SECRET=your_client_secret
+```
+
+**Important:** when registering the application, set its redirect URI to exactly `urn:ietf:wg:oauth:2.0:oob` — that's the out-of-band redirect MusicBrainz reserves for apps with no callback server (like this one), where the authorization code is shown on a page for you to copy rather than redirected anywhere. If the registered redirect URI doesn't match, MusicBrainz will refuse the login.
 
 ## Usage
 
@@ -83,6 +112,8 @@ This opens the TUI with the directory browser focused on the given path (or your
 - Navigate the tree and press **Enter** on an album folder to scan its tags.
 - On the review screen, edit any field, press **m** to check MusicBrainz, then use the option lists to pick between ambiguous candidates.
 - Press **c** to continue — for anything still missing, a button opens the matching MusicBrainz "create" form in your browser, pre-filled and ready to submit.
+- Press **l** anywhere to log in: it opens MusicBrainz's authorization page in your browser, and you paste the code it shows you back into the app.
+- Once logged in and a release has a MusicBrainz ID, press **a** on the submit screen to file it into one of your personal collections.
 - **Escape** goes back a screen; **q** quits.
 
 ## Development
@@ -100,6 +131,7 @@ Tests generate real (silent) audio fixtures with `ffmpeg` to exercise actual tag
 - [x] MusicBrainz search/match for artist, label, release group, release
 - [x] Review screen with in-TUI editing and match selection
 - [x] Seeded-form submission (open missing entities' create forms, in dependency order)
+- [x] OAuth2 login and adding resolved releases to a personal collection
 - [ ] Per-track editing (track titles/numbers) in the review screen
 - [ ] Batch mode across multiple albums in one session
 - [ ] Remember recently-used directories
