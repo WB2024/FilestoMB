@@ -8,6 +8,7 @@ from pathlib import Path
 
 from textual.app import App
 
+from . import state
 from .config import Settings, load_settings
 from .mb.client import MusicBrainzClient
 from .mb.oauth import MusicBrainzOAuth
@@ -42,6 +43,13 @@ class FilesToMBApp(App):
                 severity="warning",
                 timeout=8,
             )
+        if self.settings.has_oauth and not self.oauth.is_logged_in:
+            self.notify(
+                "Not logged in to MusicBrainz -- press l to log in (needed for collections, "
+                "ratings, and tags).",
+                severity="warning",
+                timeout=8,
+            )
         self.push_screen(BrowseScreen(self._start_path))
 
     def action_login(self) -> None:
@@ -69,13 +77,17 @@ def run() -> None:
     parser.add_argument(
         "path",
         nargs="?",
-        default=str(Path.home()),
-        help="directory to start browsing from (default: your home directory)",
+        default=None,
+        help="directory to start browsing from (default: last-used directory, or home)",
     )
     parser.add_argument("--version", action="version", version=f"filestomb {version('filestomb')}")
     args = parser.parse_args()
 
-    start_path = Path(args.path).expanduser()
+    if args.path is not None:
+        start_path = Path(args.path).expanduser()
+    else:
+        start_path = state.load_last_directory() or Path.home()
+
     if not start_path.is_dir():
         parser.error(f"not a directory: {start_path}")
 

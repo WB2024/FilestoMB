@@ -31,6 +31,7 @@ class Track:
     track_number: str | None = None
     disc_number: str | None = None
     date: str | None = None
+    length_ms: int | None = None
     musicbrainz_release_id: str | None = None
     musicbrainz_artist_id: str | None = None
     musicbrainz_release_group_id: str | None = None

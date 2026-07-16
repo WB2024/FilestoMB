@@ -14,14 +14,55 @@ Screen {
     margin: 0 1 1 1;
 }
 
-#path-input {
+#path-row {
+    height: 3;
     margin: 0 1;
+}
+
+#path-input {
+    width: 1fr;
+}
+
+#up-button {
+    margin: 0 0 0 1;
+}
+
+#current-path {
+    padding: 0 2;
+    color: $text-muted;
+    text-style: italic;
+}
+
+LoginStatus {
+    padding: 0 2;
+    height: 1;
 }
 
 #review-body,
 #submit-body,
-#login-body {
+#login-body,
+#details-body {
     padding: 1 2;
+}
+
+#details-body Label {
+    color: $text-muted;
+    margin-top: 1;
+}
+
+#details-body TextArea {
+    height: 5;
+    margin-bottom: 1;
+}
+
+#details-body SelectionList {
+    height: auto;
+    max-height: 8;
+}
+
+#details-buttons {
+    height: 3;
+    margin-top: 1;
 }
 
 #login-hint,

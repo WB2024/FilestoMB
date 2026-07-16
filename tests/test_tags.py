@@ -47,6 +47,12 @@ def test_scan_directory_reads_album_from_tracks(make_flac, tmp_path: Path) -> No
     titles = sorted(track.title for track in album.tracks)
     assert titles == ["Opening", "Second Song"]
 
+    # The fixture encodes a 0.1s (100ms) silent clip; allow generous slack
+    # for container/encoder rounding rather than asserting an exact value.
+    for track in album.tracks:
+        assert track.length_ms is not None
+        assert 0 < track.length_ms < 2000
+
 
 def test_scan_directory_returns_none_when_no_audio(tmp_path: Path) -> None:
     empty_dir = tmp_path / "empty"

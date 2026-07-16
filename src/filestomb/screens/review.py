@@ -11,6 +11,7 @@ from textual.widgets.option_list import Option
 
 from ..matching import match_album
 from ..models import Album, EntityType, MatchResult, MatchStatus
+from ..widgets.login_status import LoginStatus
 
 ENTITY_ORDER = [
     EntityType.ARTIST,
@@ -57,6 +58,7 @@ class ReviewScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield LoginStatus()
         with VerticalScroll(id="review-body"):
             yield Static(f"[b]{self.album.directory}[/b] -- {len(self.album.tracks)} track(s)")
             for field_id, label in FIELDS:

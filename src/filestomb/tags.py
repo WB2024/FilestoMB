@@ -44,6 +44,10 @@ def _read_track(path: Path) -> Track | None:
         return None
     tags = audio.tags
 
+    length_ms = None
+    if audio.info is not None and getattr(audio.info, "length", None):
+        length_ms = round(audio.info.length * 1000)
+
     artist = _first(tags, "artist") or ""
     return Track(
         path=path,
@@ -54,6 +58,7 @@ def _read_track(path: Path) -> Track | None:
         track_number=_first(tags, "tracknumber"),
         disc_number=_first(tags, "discnumber"),
         date=_first(tags, "date", "originaldate", "year"),
+        length_ms=length_ms,
         musicbrainz_release_id=_first(tags, "musicbrainz_albumid"),
         musicbrainz_artist_id=_first(tags, "musicbrainz_artistid"),
         musicbrainz_release_group_id=_first(tags, "musicbrainz_releasegroupid"),

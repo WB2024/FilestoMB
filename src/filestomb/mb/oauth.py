@@ -15,13 +15,14 @@ page for the user to copy, and pastes it back into the app.
 from __future__ import annotations
 
 import json
-import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
+
+from ..paths import config_dir
 
 AUTHORIZE_URL = "https://musicbrainz.org/oauth2/authorize"
 TOKEN_URL = "https://musicbrainz.org/oauth2/token"
@@ -36,10 +37,7 @@ DEFAULT_SCOPE = "profile collection"
 
 
 def _token_path() -> Path:
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", "") or (Path.home() / ".config"))
-    directory = config_home / "filestomb"
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory / "token.json"
+    return config_dir() / "token.json"
 
 
 @dataclass

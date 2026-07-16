@@ -13,6 +13,7 @@ from textual.widgets.option_list import Option
 
 from ..mb import seed
 from ..models import Album, EntityType, MatchResult, MatchStatus
+from ..widgets.login_status import LoginStatus
 
 VIEW_URL = {
     EntityType.ARTIST: "https://musicbrainz.org/artist/{mbid}",
@@ -50,6 +51,7 @@ class SubmitScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield LoginStatus()
         with Vertical(id="submit-body"):
             yield Static(
                 "MusicBrainz doesn't offer a direct write API for creating entities, so each "
@@ -154,25 +156,47 @@ class SubmitScreen(Screen):
         album = self.album
         if entity_type == EntityType.ARTIST:
             webbrowser.open(seed.seed_artist_url(album.artist))
+            self.notify("Opened the Artist form in your browser.")
         elif entity_type == EntityType.LABEL:
             if not album.label:
                 self.notify("This album has no label to create.", severity="warning")
                 return
             webbrowser.open(seed.seed_label_url(album.label))
+            self.notify("Opened the Label form in your browser.")
         elif entity_type == EntityType.RELEASE_GROUP:
-            webbrowser.open(seed.seed_release_group_url(album.title, album.artist))
-        elif entity_type == EntityType.RELEASE:
-            release_group_mbid = self._selected_mbid(EntityType.RELEASE_GROUP)
-            artist_mbid = self._selected_mbid(EntityType.ARTIST)
-            label_mbid = self._selected_mbid(EntityType.LABEL)
-            path = seed.build_release_seed_form(
-                album,
-                release_group_mbid=release_group_mbid,
-                artist_mbid=artist_mbid,
-                label_mbid=label_mbid,
+            from .release_group_details import ReleaseGroupDetailsScreen
+
+            self.app.push_screen(
+                ReleaseGroupDetailsScreen(album.title, album.artist),
+                self._on_release_group_details,
             )
-            webbrowser.open(f"file://{path}")
-        self.notify(f"Opened the {ENTITY_LABELS[entity_type]} form in your browser.")
+        elif entity_type == EntityType.RELEASE:
+            from .release_details import ReleaseDetailsScreen
+
+            self.app.push_screen(
+                ReleaseDetailsScreen(album.title, album.artist),
+                self._on_release_details,
+            )
+
+    def _on_release_group_details(self, details: dict | None) -> None:
+        if details is None:
+            return
+        url = seed.seed_release_group_url(self.album.title, self.album.artist, **details)
+        webbrowser.open(url)
+        self.notify("Opened the Release Group form in your browser.")
+
+    def _on_release_details(self, details: dict | None) -> None:
+        if details is None:
+            return
+        path = seed.build_release_seed_form(
+            self.album,
+            release_group_mbid=self._selected_mbid(EntityType.RELEASE_GROUP),
+            artist_mbid=self._selected_mbid(EntityType.ARTIST),
+            label_mbid=self._selected_mbid(EntityType.LABEL),
+            **details,
+        )
+        webbrowser.open(f"file://{path}")
+        self.notify("Opened the Release form in your browser.")
 
     def _selected_mbid(self, entity_type: EntityType) -> str | None:
         result = self.matches.get(entity_type)
