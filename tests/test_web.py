@@ -251,4 +251,92 @@ async def test_job_carries_awaiting_names_for_userscript(client):
     assert (await client.put("/api/job", json=job)).status_code == 200
     stored = (await client.get("/api/job")).json()
     assert stored["awaiting"] == ["release-group"] and stored["names"] == {"release-group": "Great Album"}
-    assert "norm(pageName()) === norm(expected)" in (await client.get("/filestomb.user.js")).text
+    assert "expected.some((n) => norm(pageName()) === norm(n))" in (await client.get("/filestomb.user.js")).text
+
+
+async def test_favourites_roundtrip(client, library):
+    assert (await client.get("/api/favourites")).json() == {"favourites": []}
+    added = (await client.post("/api/favourites", json={"path": "Artist One/Great Album"})).json()["favourites"]
+    assert added == [{"path": "Artist One/Great Album", "name": "Great Album", "parent": "Artist One"}]
+    await client.post("/api/favourites", json={"path": "Artist One/Great Album"})  # idempotent
+    await client.post("/api/favourites", json={"path": "Empty Folder"})
+    listed = (await client.get("/api/favourites")).json()["favourites"]
+    assert [f["path"] for f in listed] == ["Artist One/Great Album", "Empty Folder"]
+    assert listed[1]["parent"] == ""
+
+    # A favourite whose folder has since gone away is hidden rather than breaking the list.
+    (library / "Empty Folder").rmdir()
+    assert [f["path"] for f in (await client.get("/api/favourites")).json()["favourites"]] == ["Artist One/Great Album"]
+
+    after = (await client.delete("/api/favourites", params={"path": "Artist One/Great Album"})).json()
+    assert after == {"favourites": []}
+
+
+@pytest.mark.parametrize("path,status", [("", 422), ("../secret", 400), ("Nope/Nothing", 404), ("Artist One/Great Album/cover.jpg", 404)])
+async def test_favourites_validate_paths(client, path, status):
+    assert (await client.post("/api/favourites", json={"path": path})).status_code == status
+
+
+import zipfile
+
+
+def _zip(path: Path, entries: dict[str, bytes]) -> None:
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in entries.items():
+            z.writestr(name, data)
+
+
+async def test_browse_lists_archives(client, library):
+    _zip(library / "Artist One" / "Album Download.zip", {"x/01.flac": b"a"})
+    (library / "Artist One" / "notes.txt").write_text("x")
+    listing = (await client.get("/api/browse", params={"path": "Artist One"})).json()
+    assert listing["archives"] == [{"name": "Album Download.zip", "path": "Artist One/Album Download.zip", "bytes": (library / "Artist One" / "Album Download.zip").stat().st_size}]
+    assert listing["writable"] is True
+    assert (await client.get("/api/browse")).json()["archives"] == []
+
+
+async def test_extract_then_browse_new_folder(client, library):
+    from filestomb import archives
+
+    if archives.find_sevenzip() is None:
+        pytest.skip("7-Zip is not installed")
+    _zip(library / "Artist One" / "Second Album.zip", {"01.flac": b"a", "02.flac": b"b"})
+    result = (await client.post("/api/extract", json={"path": "Artist One/Second Album.zip"})).json()
+    assert result == {"path": "Artist One/Second Album", "name": "Second Album", "files": 2}
+    listing = (await client.get("/api/browse", params={"path": "Artist One"})).json()
+    assert "Second Album" in [d["name"] for d in listing["dirs"]]
+    assert (library / "Artist One" / "Second Album.zip").exists()
+
+
+@pytest.mark.parametrize("path,status", [("Artist One/Great Album/cover.jpg", 422), ("Nope.zip", 404), ("../secret/x.txt", 400), ("Empty Folder", 404)])
+async def test_extract_rejects_bad_targets(client, path, status):
+    assert (await client.post("/api/extract", json={"path": path})).status_code == status
+
+
+async def test_extract_reports_bad_archives(client, library):
+    (library / "Empty Folder" / "broken.zip").write_bytes(b"not really a zip")
+    response = await client.post("/api/extract", json={"path": "Empty Folder/broken.zip"})
+    assert response.status_code == 422 and response.json()["detail"]
+
+
+@respx.mock
+async def test_match_splits_a_credit_into_separate_artist_searches(client):
+    searches = []
+
+    def artist_search(request):
+        searches.append(request.url.params["query"])
+        return httpx.Response(200, json={"artists": []})
+
+    respx.get("https://musicbrainz.org/ws/2/artist").mock(side_effect=artist_search)
+    respx.get("https://musicbrainz.org/ws/2/release-group").respond(json={"release-groups": []})
+    respx.get("https://musicbrainz.org/ws/2/release").respond(json={"releases": []})
+    out = (await client.post("/api/match", json={"title": "T", "artist": "A & B", "artists": ["A", "B"]})).json()
+    assert {"artist", "artist-2", "release-group", "release"} <= set(out)
+    assert out["artist"]["query"] == "A" and out["artist-2"]["query"] == "B"
+    assert len(searches) == 2  # the combined "A & B" string is not searched as an artist
+
+
+async def test_release_seed_endpoint_passes_the_split_credit(client):
+    body = {"album": {"title": "T", "artist": "A & B", "tracks": []}, "artists": [{"name": "A", "mbid": None}, {"name": "B", "mbid": None}], "join_phrase": " & "}
+    fields = (await client.post("/api/seed/release", json=body)).json()["fields"]
+    assert fields["artist_credit.names.0.join_phrase"] == " & " and fields["artist_credit.names.1.name"] == "B"

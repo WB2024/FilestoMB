@@ -21,6 +21,8 @@ const ICON = {
   ext: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6m0-6L10 14M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6m0 0-5 5m5-5 5 5"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5m0 0 6-6m-6 6 6 6"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg>',
+  box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>',
   chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
 };
 
@@ -31,8 +33,28 @@ const ENTITIES = {
   release: { name: 'Release', icon: ICON.release, view: (id) => `https://musicbrainz.org/release/${id}` },
 };
 // Dependency order: parents before the entities that reference them.
-const SUBMIT_ORDER = ['label', 'artist', 'release-group', 'release'];
-const REVIEW_ORDER = ['artist', 'label', 'release-group', 'release'];
+// A credit like "Morrissey & Johnny Marr" can be split into separate artists on a chosen
+// separator. Each gets its own match entity: 'artist', 'artist-2', 'artist-3', ...
+const SEPARATOR_KEY = 'filestomb.separator';
+const savedSeparator = () => { try { return localStorage.getItem(SEPARATOR_KEY) || ' & '; } catch { return ' & '; } };
+function artistNames(a = state.album) {
+  const whole = (a?.artist || '').trim();
+  const sp = a?.split;
+  if (!sp?.on || !sp.sep) return [whole];
+  const parts = whole.split(sp.sep).map((n) => n.trim()).filter(Boolean);
+  return parts.length ? parts : [whole];
+}
+const isSplit = () => artistNames().length > 1;
+const artistKeys = () => artistNames().map((_, i) => (i === 0 ? 'artist' : `artist-${i + 1}`));
+const isArtistKey = (k) => k === 'artist' || /^artist-\d+$/.test(k);
+const artistIndex = (k) => (k === 'artist' ? 0 : Number(k.split('-')[1]) - 1);
+const joinPhrase = () => (isSplit() ? state.album.split.sep : '');
+function entityInfo(key) {
+  if (!isArtistKey(key)) return ENTITIES[key];
+  return { ...ENTITIES.artist, name: isSplit() ? `Artist ${artistIndex(key) + 1}` : 'Artist' };
+}
+const submitOrder = () => ['label', ...artistKeys(), 'release-group', 'release'];
+const reviewOrder = () => [...artistKeys(), 'label', 'release-group', 'release'];
 
 const state = {
   config: null,
@@ -46,6 +68,10 @@ const state = {
   checking: false,
   opened: {},        // entities whose seeded form was opened
   maxStep: 0,
+  extracted: {},     // archive path -> {path, name, files} once extracted this session
+  highlight: null,   // folder path to spotlight after an extraction
+  picard: { status: null, statusAt: 0, sent: null, saved: false },
+  favs: [],          // favourite folders: [{path, name, parent}]
 };
 
 // ---------------------------------------------------------------- api / ui plumbing
@@ -114,9 +140,12 @@ function renderChrome() {
   $$('#stepper [data-go]').forEach((b) => b.dataset.go && b.addEventListener('click', () => go(b.dataset.go)));
 
   const a = state.auth;
-  $('#auth-chip').innerHTML = `<button class="chip ${userscriptInstalled() ? (userscriptOutdated() ? 'warn' : 'on') : ''}" id="us-btn" title="Browser userscript"><span class="dot"></span>Userscript</button> <button class="chip ${a.logged_in ? 'on' : ''}" id="auth-btn"><span class="dot"></span>${a.logged_in ? esc(a.username || 'Logged in') : 'Log in to MusicBrainz'}</button>`;
+  $('#auth-chip').innerHTML = `<button class="chip ${state.view === 'library' ? 'on' : ''}" id="lib-btn" title="Process a whole folder of albums"><span class="dot"></span>Library</button> ${state.enf?.configured && state.enf.reachable ? `<button class="chip ${state.view === 'genres' ? 'on' : ''}" id="gen-btn" title="Artists that still need a genre in Music Genre Enforcer"><span class="dot"></span>Genres${state.enf.counts?.undefined ? ` <b>${state.enf.counts.undefined}</b>` : ''}</button> ` : ''}<button class="chip ${userscriptInstalled() ? (userscriptOutdated() ? 'warn' : 'on') : ''}" id="us-btn" title="Browser userscript"><span class="dot"></span>Userscript</button> <button class="chip" id="set-btn" title="fanart.tv key and other optional services"><span class="dot"></span>Settings</button> <button class="chip ${a.logged_in ? 'on' : ''}" id="auth-btn"><span class="dot"></span>${a.logged_in ? esc(a.username || 'Logged in') : 'Log in to MusicBrainz'}</button>`;
   $('#auth-btn').addEventListener('click', openLogin);
   $('#us-btn').addEventListener('click', openUserscript);
+  $('#set-btn').addEventListener('click', openSettings);
+  $('#gen-btn')?.addEventListener('click', () => go('genres'));
+  $('#lib-btn').addEventListener('click', () => openLibrary(state.lib.root));
 }
 
 const userscriptInstalled = () => !!document.documentElement.dataset.filestombUserscript;
@@ -126,49 +155,69 @@ function go(view) {
   state.view = view;
   state.maxStep = Math.max(state.maxStep, ['browse', 'review', 'submit'].indexOf(view));
   renderChrome();
-  ({ browse: renderBrowse, review: renderReview, submit: renderSubmit })[view]();
+  if (view !== 'library') libStop();
+  ({ browse: renderBrowse, review: renderReview, submit: renderSubmit, library: renderLibrary, genres: renderGenres })[view]();
   window.scrollTo({ top: 0 });
 }
 
 // ---------------------------------------------------------------- browse
-async function loadBrowse(path) {
+// The folder being browsed lives in the address bar (#/Some/Folder), so a
+// refresh stays put and Back/Forward walk through folders. A bare "/" is the
+// library root.
+const pathFromHash = () => { try { return decodeURIComponent(location.hash.replace(/^#\/?/, '')); } catch { return ''; } };
+const hashFor = (p) => (p ? '#/' + p.split('/').map(encodeURIComponent).join('/') : '');
+
+async function loadBrowse(path, { push = true, keepHighlight = false } = {}) {
+  if (!keepHighlight) state.highlight = null;
+  state.batchCtx = null;
   app().innerHTML = `<section class="view"><div class="folder-grid">${'<div class="skeleton"></div>'.repeat(9)}</div></section>`;
   try {
     state.browse = await api('GET', `/api/browse?path=${encodeURIComponent(path)}`);
     state.filter = '';
+    if (push && pathFromHash() !== path) history.pushState(null, '', location.pathname + hashFor(path));
     renderBrowse();
   } catch (e) {
     toast(e.message, 'error');
-    if (path) loadBrowse('');
+    if (path) loadBrowse('', { push: false }).then(() => history.replaceState(null, '', location.pathname));
     else app().innerHTML = `<div class="empty card pad"><h2>Can't open the library</h2><p>${esc(e.message)}</p></div>`;
   }
 }
 
 function renderBrowse() {
-  if (!state.browse) return loadBrowse(state.config.last_path || '');
+  if (!state.browse) return loadBrowse(pathFromHash(), { push: false });
   const b = state.browse;
   const q = state.filter.toLowerCase();
   const dirs = b.dirs.filter((d) => d.name.toLowerCase().includes(q));
   const parent = b.crumbs.length > 1 ? b.crumbs[b.crumbs.length - 2].path : null;
+  // The folder holding the album you last worked on: handy for doing its siblings next.
+  const resumeFolder = (state.config.last_path || '').split('/').slice(0, -1).join('/');
 
   app().innerHTML = `
   <section class="view">
     <div class="page-head">
       <div><h2>Choose an album</h2><p>Open a folder of tagged audio files. Folders with music are marked and scan on click.</p></div>
+      ${resumeFolder && b.path === '' ? `<button class="btn" id="resume" title="${esc(resumeFolder)}">${ICON.back} Resume in ${esc(resumeFolder.split('/').pop())}</button>` : ''}
     </div>
     <div class="card toolbar">
       <button class="btn small" id="up" ${parent === null ? 'disabled' : ''}>${ICON.up} Up</button>
+      ${b.path ? favBtn(b.path, b.crumbs[b.crumbs.length - 1].name) : ''}
       <div class="crumbs">${b.crumbs.map((c, i) => `${i ? '<span class="sep">/</span>' : ''}<button data-path="${esc(c.path)}" class="${i === b.crumbs.length - 1 ? 'cur' : ''}">${esc(c.name)}</button>`).join('')}</div>
       <input class="search" id="filter" type="text" placeholder="Filter folders…" value="${esc(state.filter)}" aria-label="Filter folders">
+      ${b.path ? `<button class="btn" id="batch-here" title="Find every album under this folder, match them against MusicBrainz and triage them">${ICON.box} Batch this folder</button>` : ''}
       <button class="btn ${b.audio_files ? 'primary' : ''}" id="scan-here">${ICON.music} ${b.audio_files ? `Scan this folder (${b.audio_files} file${b.audio_files === 1 ? '' : 's'})` : 'Scan this folder'}</button>
     </div>
+    ${b.path === '' ? favChipsHTML() : ''}
+    ${archivesHTML(b)}
     ${dirs.length ? `<div class="folder-grid" id="grid">${dirs.map((d) => folderCard(d)).join('')}</div>`
       : `<div class="empty card"><img src="/static/logo.png" alt=""><p>${b.dirs.length ? 'No folders match that filter.' : 'No sub-folders here.'}</p></div>`}
   </section>`;
 
   $('#up').addEventListener('click', () => loadBrowse(parent));
+  const resume = $('#resume');
+  if (resume) resume.addEventListener('click', () => loadBrowse(resumeFolder));
   $$('.crumbs button').forEach((c) => c.addEventListener('click', () => loadBrowse(c.dataset.path)));
   $('#scan-here').addEventListener('click', () => scan(b.path));
+  $('#batch-here')?.addEventListener('click', () => openLibrary(b.path));
   const f = $('#filter');
   f.addEventListener('input', () => {
     state.filter = f.value;
@@ -177,28 +226,83 @@ function renderBrowse() {
     if (grid) $$('.folder-wrap', grid).forEach((w) => { w.hidden = !w.dataset.name.includes(query); });
   });
   $$('[data-open]').forEach((el) => el.addEventListener('click', () => loadBrowse(el.dataset.open)));
+  $$('[data-extract]').forEach((el) => el.addEventListener('click', () => extractArchive(el.dataset.extract, el)));
+  $$('[data-fav]').forEach((el) => el.addEventListener('click', (e) => { e.stopPropagation(); toggleFav(el.dataset.fav); }));
   $$('[data-scan]').forEach((el) => el.addEventListener('click', () => scan(el.dataset.scan)));
 }
+
+const isFav = (path) => state.favs.some((f) => f.path === path);
+const favBtn = (path, name) => `<button class="favbtn ${isFav(path) ? 'on' : ''}" data-fav="${esc(path)}" aria-pressed="${isFav(path)}" title="${isFav(path) ? 'Remove from favourites' : 'Add to favourites'}" aria-label="Favourite ${esc(name)}">${ICON.star}</button>`;
 
 function folderCard(d) {
   const attr = `data-name="${esc(d.name.toLowerCase())}"`;
   if (d.has_audio) {
-    return `<div class="folder-wrap album" ${attr}>
+    return `<div class="folder-wrap album ${d.path === state.highlight ? 'fresh' : ''}" ${attr}>
       <button class="folder album" data-scan="${esc(d.path)}" title="Scan ${esc(d.name)}"><span class="ico">${ICON.music}</span><span class="name">${esc(d.name)}</span></button>
-      <button class="btn small ghost into" data-open="${esc(d.path)}" title="Browse inside" aria-label="Browse inside ${esc(d.name)}">Open ${ICON.chev}</button>
+      <div class="actions">${favBtn(d.path, d.name)}<button class="btn small ghost" data-open="${esc(d.path)}" title="Browse inside" aria-label="Browse inside ${esc(d.name)}">Open ${ICON.chev}</button></div>
     </div>`;
   }
-  return `<div class="folder-wrap" ${attr}><button class="folder" data-open="${esc(d.path)}"><span class="ico">${ICON.folder}</span><span class="name">${esc(d.name)}</span></button></div>`;
+  return `<div class="folder-wrap plain ${d.path === state.highlight ? 'fresh' : ''}" ${attr}><button class="folder" data-open="${esc(d.path)}"><span class="ico">${ICON.folder}</span><span class="name">${esc(d.name)}</span></button><div class="actions">${favBtn(d.path, d.name)}</div></div>`;
+}
+
+const fmtSize = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+const extractorMissing = (name) => (/\.rar$/i.test(name) ? !state.config.can_extract_rar : /\.(zip|7z)$/i.test(name) ? !state.config.can_extract_all : false);
+
+function archivesHTML(b) {
+  if (!b.archives?.length) return '';
+  return `<div class="card archives"><div class="arch-head">${ICON.box}<b>Archives</b><span class="note">Extracted into this folder. The archive itself is kept.</span></div>
+    ${b.archives.map((a) => {
+      const done = state.extracted[a.path];
+      const blocked = !b.writable ? 'This library is mounted read-only, so nothing can be extracted.' : extractorMissing(a.name) ? 'This server is missing the tool needed for this archive type.' : '';
+      return `<div class="arch-row"><span class="ico">${ICON.box}</span><span class="aname">${esc(a.name)}<small>${fmtSize(a.bytes)}</small></span>
+        ${done ? `<span class="pill existing">Extracted · ${done.files} files</span><button class="btn small primary" data-open="${esc(done.path)}">Open folder ${ICON.chev}</button>`
+          : `<button class="btn small" data-extract="${esc(a.path)}" ${blocked ? `disabled title="${esc(blocked)}"` : ''}>${ICON.down} Extract here</button>`}</div>`;
+    }).join('')}</div>`;
+}
+
+async function extractArchive(path, btn) {
+  busy(btn, true, 'Extracting…');
+  try {
+    const res = await api('POST', '/api/extract', { path });
+    state.extracted[path] = res;
+    state.highlight = res.path;
+    toast(`Extracted ${res.files} file${res.files === 1 ? '' : 's'} to “${res.name}”.`, 'ok');
+    await loadBrowse(state.browse.path, { push: false, keepHighlight: true });
+    $('.folder-wrap.fresh')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  } catch (e) {
+    busy(btn, false);
+    toast(e.message, 'error');
+  }
+}
+
+async function toggleFav(path) {
+  try {
+    const res = isFav(path) ? await api('DELETE', `/api/favourites?path=${encodeURIComponent(path)}`) : await api('POST', '/api/favourites', { path });
+    state.favs = res.favourites;
+    if (state.view === 'browse') renderBrowse();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Favourite chips: shown at the library root. Parent folder is added only
+// when two favourites share a name, so labels stay short but unambiguous.
+function favChipsHTML() {
+  if (!state.favs.length) return '';
+  const counts = {};
+  state.favs.forEach((f) => { counts[f.name] = (counts[f.name] || 0) + 1; });
+  return `<div class="favs" aria-label="Favourite folders"><span class="favs-label">${ICON.star} Favourites</span>${state.favs.map((f) => `<span class="favchip"><button class="chipgo" data-open="${esc(f.path)}" title="${esc(f.path)}">${counts[f.name] > 1 && f.parent ? `<small>${esc(f.parent)} /</small> ` : ''}${esc(f.name)}</button><button class="chipx" data-fav="${esc(f.path)}" title="Remove from favourites" aria-label="Remove ${esc(f.name)} from favourites">×</button></span>`).join('')}</div>`;
 }
 
 async function scan(path) {
   app().innerHTML = `<div class="scanning"><span class="spinner"></span><div>Reading tags…</div></div>`;
   try {
     const album = await api('POST', '/api/scan', { path });
+    album.split = { on: false, sep: savedSeparator() };
     state.album = album;
+    state.config.last_path = album.path;
     state.cover = album.cover;
     state.matches = null;
     state.opened = {};
+    state.picard.sent = null; state.picard.saved = false;
     go('review');
     if (album.tagged_release_mbid) toast('These files are already tagged with a MusicBrainz release ID.', 'ok');
     checkMusicBrainz();
@@ -214,7 +318,8 @@ async function checkMusicBrainz({ keepSelections = false } = {}) {
   if (!a.title.trim() || !a.artist.trim()) { toast('Title and artist are needed to search MusicBrainz.', 'warn'); return; }
   state.checking = true; refreshMatchUI();
   try {
-    const found = await api('POST', '/api/match', { title: a.title, artist: a.artist, label: a.label });
+    const names = artistNames();
+    const found = await api('POST', '/api/match', { title: a.title, artist: a.artist, label: a.label, artists: names.length > 1 ? names : [] });
     const old = state.matches || {};
     const next = {};
     for (const [key, r] of Object.entries(found)) {
@@ -260,7 +365,7 @@ function renderReview() {
         <div class="card pad">
           <div id="cover-card">${coverCardHTML()}</div>
           ${[['title', 'Title'], ['artist', 'Artist'], ['date', 'Date'], ['label', 'Label'], ['catalog_number', 'Catalog #'], ['barcode', 'Barcode']]
-            .map(([k, l]) => `<label class="field"><span>${l}</span><input type="text" data-field="${k}" value="${esc(a[k])}" ${k === 'date' ? 'placeholder="YYYY or YYYY-MM-DD"' : ''}></label>`).join('')}
+            .map(([k, l]) => `<label class="field"><span>${l}</span><input type="text" data-field="${k}" value="${esc(a[k])}" ${k === 'date' ? 'placeholder="YYYY or YYYY-MM-DD"' : ''}></label>${k === 'artist' ? '<div id="split-box"></div>' : ''}`).join('')}
         </div>
       </aside>
       <div>
@@ -275,20 +380,39 @@ function renderReview() {
     </div>
   </section>
   <div class="actionbar"><div class="inner">
-    <button class="btn" id="back">${ICON.back} Choose another album</button>
+    <div style="display:flex;gap:8px">${batchBar()}<button class="btn" id="back">${ICON.back} ${state.batchCtx ? 'Browse' : 'Choose another album'}</button></div>
     <button class="btn primary" id="next">Continue to submit ${ICON.chev}</button>
   </div></div>`;
 
   $$('[data-field]').forEach((i) => i.addEventListener('input', () => { a[i.dataset.field] = i.value; }));
   $$('[data-track]').forEach((i) => i.addEventListener('input', () => { a.tracks[+i.dataset.track][i.dataset.k] = i.value; }));
   wireCover();
+  renderSplitBox();
   $('#check').addEventListener('click', () => checkMusicBrainz({ keepSelections: true }));
-  $('#back').addEventListener('click', () => go('browse'));
+  wireBatchBar();
+  $('#back').addEventListener('click', () => { state.batchCtx = null; go('browse'); });
   $('#next').addEventListener('click', () => {
     if (!state.matches) { toast('Check MusicBrainz first.', 'warn'); return; }
     go('submit');
   });
   refreshMatchUI();
+}
+
+// "Split into separate artists": a toggle plus a free-text separator (e.g. " & ").
+function renderSplitBox() {
+  const box = $('#split-box'); if (!box) return;
+  const a = state.album; const sp = a.split;
+  const names = artistNames();
+  box.innerHTML = `<label style="display:flex;gap:8px;align-items:center;margin:-6px 0 10px;font-size:.85rem"><input type="checkbox" id="split-on" ${sp.on ? 'checked' : ''}> Credit is several artists</label>
+    ${sp.on ? `<label class="field"><span>Separator <small style="text-transform:none;letter-spacing:0">(spaces count)</small></span><input type="text" id="split-sep" value="${esc(sp.sep)}" spellcheck="false" placeholder=" &amp; "></label>
+    <div class="note" style="margin:-6px 0 10px">${names.length > 1 ? `${names.length} artists: ${names.map((n) => `<b>${esc(n)}</b>`).join(' + ')}` : 'That separator isn\'t in the artist, so it stays one artist.'}</div>` : ''}`;
+  const apply = () => { state.matches = null; renderReview(); checkMusicBrainz(); };
+  $('#split-on').addEventListener('change', (e) => { sp.on = e.target.checked; apply(); });
+  const sep = $('#split-sep');
+  if (sep) {
+    sep.addEventListener('input', () => { sp.sep = sep.value; try { if (sp.sep.trim()) localStorage.setItem(SEPARATOR_KEY, sp.sep); } catch { /* optional */ } });
+    sep.addEventListener('change', apply);
+  }
 }
 
 const coverUrl = (download = false) => `/api/cover?path=${encodeURIComponent(state.album.path)}&v=${state.coverV || 0}${download ? '&download=1' : ''}`;
@@ -302,7 +426,7 @@ function coverCardHTML() {
     ${coverActionsHTML()}`;
 }
 function coverActionsHTML() {
-  return `<div class="cover-actions"><button class="btn small" data-cover="upload">${ICON.up} Upload…</button><button class="btn small" data-cover="pick">${ICON.folder} From folder…</button>${state.cover?.custom ? '<button class="btn small ghost" data-cover="reset">Reset</button>' : ''}<input type="file" id="cover-file" accept="image/jpeg,image/png,image/gif,image/webp" hidden></div>`;
+  return `<div class="cover-actions"><button class="btn small" data-cover="upload">${ICON.up} Upload…</button><button class="btn small" data-cover="pick">${ICON.folder} From folder…</button><button class="btn small" data-cover="online" title="Cover Art Archive and fanart.tv">${ICON.search} Find online…</button>${state.cover?.custom ? '<button class="btn small ghost" data-cover="reset">Reset</button>' : ''}<input type="file" id="cover-file" accept="image/jpeg,image/png,image/gif,image/webp" hidden></div>`;
 }
 function refreshCover() {
   if (state.view === 'review') { const card = $('#cover-card'); if (card) { card.innerHTML = coverCardHTML(); wireCover(); } }
@@ -314,6 +438,7 @@ function wireCover() {
   $$('[data-cover]').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.cover === 'upload') input.click();
     else if (b.dataset.cover === 'pick') pickFromFolder();
+    else if (b.dataset.cover === 'online') pickOnline();
     else resetCover();
   }));
   input.addEventListener('change', () => { if (input.files[0]) uploadCover(input.files[0]); });
@@ -357,6 +482,91 @@ async function pickFromFolder() {
     }));
   } catch (e) { closeDialog(); toast(e.message, 'error'); }
 }
+async function pickOnline() {
+  const rel = state.matches?.release?.selected;
+  const rg = state.matches?.['release-group']?.selected;
+  const head = '<div class="dlg-head"><h3>Find cover art online</h3><p>From the Cover Art Archive and fanart.tv, for the release you matched.</p></div>';
+  if (!rel && !rg) {
+    openDialog(`${head}<div class="dlg-body"><p class="note">Match this album to a MusicBrainz release (or release group) first, then come back. Both services are looked up by MusicBrainz ID.</p></div><div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button></div>`);
+    $('#dlg-cancel').addEventListener('click', closeDialog); return;
+  }
+  openDialog(`${head}<div class="dlg-body"><div class="scanning" style="padding:30px 0"><span class="spinner"></span></div></div>`);
+  try {
+    const { images, notes } = await api('GET', `/api/artwork?release=${rel || ''}&release_group=${rg || ''}`);
+    const src = { caa: 'Cover Art Archive', fanart: 'fanart.tv' };
+    openDialog(`${head}<div class="dlg-body">${images.length ? `<div class="imggrid">${images.map((i, n) => `<button data-n="${n}" title="${esc(src[i.source])} · ${esc(i.scope)}"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(i.thumb)}" alt=""><span>${esc(i.label)}</span><small>${esc(src[i.source])}${i.front ? ' · front' : ''}</small></button>`).join('')}</div>` : '<p class="note">No artwork found for this release.</p>'}${(notes || []).map((n) => `<p class="note">${esc(n)}</p>`).join('')}</div>
+      <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button></div>`);
+    $('#dlg-cancel').addEventListener('click', closeDialog);
+    $$('[data-n]').forEach((b) => b.addEventListener('click', async () => {
+      busy(b, true, 'Downloading…');
+      try {
+        state.cover = await api('POST', '/api/cover/online', { path: state.album.path, url: images[+b.dataset.n].url });
+        state.coverV = Date.now(); closeDialog(); refreshCover(); toast('Cover art set.', 'ok');
+      } catch (e) { busy(b, false); toast(e.message, 'error'); }
+    }));
+  } catch (e) { closeDialog(); toast(e.message, 'error'); }
+}
+
+async function openSettings() {
+  let st;
+  try { st = await api('GET', '/api/settings'); } catch (e) { toast(e.message, 'error'); return; }
+  const f = st.fanart_api_key; const lk = st.lidarr_api_key;
+  const val = (k) => esc(st[k]?.value || '');
+  const tag = (x) => (x.set ? '<b style="color:var(--ok)">· saved</b>' : '') + (x.from_env ? ' <small>(from environment)</small>' : '');
+  openDialog(`<div class="dlg-head"><h3>Settings</h3><p>Optional services. Keys are stored on the server in its config folder and never shown again.</p></div>
+    <div class="dlg-body">
+      <h4 style="margin:0 0 8px">fanart.tv</h4>
+      <label class="field"><span>API key ${tag(f)}</span>
+        <input type="password" id="set-fanart" autocomplete="off" placeholder="${f.set ? 'Leave blank to keep the saved key' : 'Paste your key'}">
+      </label>
+      <p class="note">Used by “Find online…” on the cover card, alongside the Cover Art Archive.</p>
+      <div class="inline-actions" style="margin-bottom:18px">${f.set ? '<button class="btn small" id="set-test">Test key</button><button class="btn small ghost" id="set-clear">Remove key</button>' : ''}</div>
+      <h4 style="margin:0 0 8px">Lidarr</h4>
+      <label class="field"><span>URL</span><input id="set-lurl" value="${val('lidarr_url')}" placeholder="http://192.168.1.110:8686"></label>
+      <label class="field"><span>API key ${tag(lk)}</span><input type="password" id="set-lkey" autocomplete="off" placeholder="${lk.set ? 'Leave blank to keep the saved key' : 'Lidarr → Settings → General → API Key'}"></label>
+      <label class="field"><span>Root folder, as Lidarr sees it</span><input id="set-lroot" value="${val('lidarr_root_folder')}" placeholder="/data/Media/Audio/Music/Sources/Clean"></label>
+      <label class="field"><span>Library mount inside Lidarr</span><input id="set-llib" value="${val('lidarr_library_path') || '/data'}" placeholder="/data"></label>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-lauto" ${st.lidarr_auto?.value === '1' ? 'checked' : ''}> Batch mode sends each finished album to Lidarr automatically</label>
+      <p class="note">Albums are added by their exact MusicBrainz release and Lidarr rescans the folder where Picard saved them. Files are never moved or renamed by Lidarr.</p>
+      <div class="inline-actions" style="margin-bottom:18px">${lk.set ? '<button class="btn small" id="set-ltest">Test Lidarr</button>' : ''}</div>
+      <h4 style="margin:0 0 8px">Music Genre Enforcer</h4>
+      <label class="field"><span>URL</span><input id="set-eurl" value="${val('enforcer_url')}" placeholder="http://192.168.1.110:8320"></label>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-eauto" ${st.enforcer_auto?.value === '1' ? 'checked' : ''}> Batch mode tells it about each finished album</label>
+      <p class="note">New artists are reviewed inside FilesToMB (the Genres chip). The enforcer itself keeps the genres and writes the tags.</p>
+      <div class="inline-actions">${st.enforcer_url?.set ? '<button class="btn small" id="set-etest">Test connection</button>' : ''}</div>
+    </div>
+    <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button><button class="btn primary" id="set-save">Save</button></div>`);
+  $('#dlg-cancel').addEventListener('click', closeDialog);
+  $('#set-save').addEventListener('click', async () => {
+    const body = { lidarr_url: $('#set-lurl').value.trim(), lidarr_root_folder: $('#set-lroot').value.trim(), lidarr_library_path: $('#set-llib').value.trim(), lidarr_auto: $('#set-lauto').checked ? '1' : '', enforcer_url: $('#set-eurl').value.trim(), enforcer_auto: $('#set-eauto').checked ? '1' : '' };
+    if ($('#set-fanart').value.trim()) body.fanart_api_key = $('#set-fanart').value.trim();
+    if ($('#set-lkey').value.trim()) body.lidarr_api_key = $('#set-lkey').value.trim();
+    try { await api('PUT', '/api/settings', body); toast('Saved.', 'ok'); loadEnforcerStatus(); openSettings(); } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#set-clear')?.addEventListener('click', async () => { try { await api('PUT', '/api/settings', { fanart_api_key: '' }); toast('Key removed.'); openSettings(); } catch (e) { toast(e.message, 'error'); } });
+  $('#set-test')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; // currentTarget is cleared once the handler awaits
+    busy(btn, true, 'Testing…');
+    try { const r = await api('POST', '/api/settings/test-fanart'); toast(`fanart.tv key works (${r.images} images found for the test album).`, 'ok'); } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
+  $('#set-etest')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    busy(btn, true, 'Testing…');
+    try { const r = await api('POST', '/api/settings/test-enforcer'); toast(`Connected: ${r.artists} artists, ${r.undefined} still need a genre.`, 'ok'); } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
+  $('#set-ltest')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    busy(btn, true, 'Testing…');
+    try {
+      const r = await api('POST', '/api/settings/test-lidarr');
+      toast(r.root_folder_found ? `Lidarr ${r.version} connected; root folder found.` : `Connected to Lidarr ${r.version}, but that root folder isn't in it. Lidarr has: ${r.root_folders.join(', ') || 'none'}.`, r.root_folder_found ? 'ok' : 'warn');
+    } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
+}
+
 // Paste an image from the clipboard anywhere on the review/submit screens.
 document.addEventListener('paste', (e) => {
   if (!state.album || !['review', 'submit'].includes(state.view) || /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
@@ -371,11 +581,11 @@ function refreshMatchUI() {
   if (btn) { btn.disabled = state.checking; btn.innerHTML = state.checking ? `<span class="spinner"></span> Searching…` : `${ICON.search} Check MusicBrainz`; }
   if (!host) return;
   if (state.checking && !state.matches) {
-    host.innerHTML = REVIEW_ORDER.map(() => '<div class="skeleton" style="margin-bottom:14px;height:74px"></div>').join('');
+    host.innerHTML = reviewOrder().map(() => '<div class="skeleton" style="margin-bottom:14px;height:74px"></div>').join('');
     return;
   }
   if (!state.matches) { host.innerHTML = `<div class="card pad note">Not checked yet.</div>`; return; }
-  host.innerHTML = REVIEW_ORDER.filter((k) => state.matches[k]).map(entityCard).join('');
+  host.innerHTML = reviewOrder().filter((k) => state.matches[k]).map(entityCard).join('');
 
   $$('[data-pick]', host).forEach((r) => r.addEventListener('change', () => {
     const [key, mbid] = r.dataset.pick.split('|');
@@ -398,7 +608,7 @@ function refreshMatchUI() {
 
 function entityCard(key) {
   const m = state.matches[key];
-  const info = ENTITIES[key];
+  const info = entityInfo(key);
   const status = effective(key);
   const label = { existing: 'Using existing', missing: 'Will create', ambiguous: 'Needs a pick', unchecked: 'Unchecked' }[status];
   const row = (id, body, score) => `<label class="cand ${(id === '__new__' ? m.createNew : m.selected === id) ? 'sel' : ''}">
@@ -420,7 +630,7 @@ function entityCard(key) {
 async function pushJob() {
   const a = state.album;
   try {
-    await api('PUT', '/api/job', { path: a.path, title: a.title, artist: a.artist, release_mbid: state.matches?.release?.selected || null, has_cover: !!state.cover, cover_filename: state.cover?.filename || null, awaiting: SUBMIT_ORDER.filter((k) => state.matches?.[k] && effective(k) === 'missing'), names: { artist: a.artist, label: a.label, 'release-group': a.title, release: a.title } });
+    await api('PUT', '/api/job', { path: a.path, title: a.title, artist: a.artist, release_mbid: state.matches?.release?.selected || null, has_cover: !!state.cover, cover_filename: state.cover?.filename || null, awaiting: [...new Set(submitOrder().filter((k) => state.matches?.[k] && effective(k) === 'missing').map((k) => (isArtistKey(k) ? 'artist' : k)))], names: { artist: artistNames()[0], label: a.label, 'release-group': a.title, release: a.title }, artist_names: artistNames() });
   } catch { /* the userscript is optional */ }
 }
 
@@ -465,7 +675,7 @@ async function lookupCreated() {
   return changed;
 }
 
-const anyMissing = () => !!state.matches && SUBMIT_ORDER.some((k) => state.matches[k] && effective(k) === 'missing');
+const anyMissing = () => !!state.matches && submitOrder().some((k) => state.matches[k] && effective(k) === 'missing');
 let polling = false;
 let ticks = 0;
 let lastFullCheck = 0;
@@ -478,9 +688,9 @@ async function refreshSubmit({ full = false } = {}) {
     try { changed = await lookupCreated(); } catch { /* transient MusicBrainz error: try again next tick */ }
     if (full && anyMissing() && Date.now() - lastFullCheck > 10000) {
       lastFullCheck = Date.now();
-      const before = JSON.stringify(SUBMIT_ORDER.map((k) => effective(k)));
+      const before = JSON.stringify(submitOrder().map((k) => effective(k)));
       await checkMusicBrainz({ keepSelections: true });
-      changed = changed || before !== JSON.stringify(SUBMIT_ORDER.map((k) => effective(k)));
+      changed = changed || before !== JSON.stringify(submitOrder().map((k) => effective(k)));
     }
     if (changed && state.view === 'submit') renderSubmit();
   } finally { polling = false; }
@@ -495,15 +705,23 @@ async function pollSubmit() {
     const { captures } = await api('GET', '/api/job/captures');
     if (captures.length) {
       for (const c of captures) {
-        if (!state.matches[c.entity]) continue;
-        adopt(c.entity, { mbid: c.mbid, name: c.name || 'Captured from MusicBrainz', score: 100, disambiguation: c.mbid.slice(0, 8) + '…' });
-        toast(`${ENTITIES[c.entity].name} captured from MusicBrainz.`, 'ok');
+        const slot = c.entity === 'artist' ? captureArtistSlot(c) : c.entity;
+        if (!slot || !state.matches[slot]) continue;
+        adopt(slot, { mbid: c.mbid, name: c.name || 'Captured from MusicBrainz', score: 100, disambiguation: c.mbid.slice(0, 8) + '…' });
+        toast(`${entityInfo(c.entity).name} captured from MusicBrainz.`, 'ok');
       }
       renderSubmit();
       return;
     }
   } catch { /* ignore */ }
   if (ticks % 3 === 0 && anyMissing()) refreshSubmit();
+}
+// A captured artist belongs to the slot whose name it matches (else the first one still missing).
+function captureArtistSlot(c) {
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const keys = artistKeys().filter((k) => state.matches[k]);
+  const byName = keys.find((k) => norm(artistNames()[artistIndex(k)]) === norm(c.name));
+  return byName || keys.find((k) => !state.matches[k].selected && state.opened[k]) || keys.find((k) => !state.matches[k].selected) || null;
 }
 setInterval(pollSubmit, 2500);
 
@@ -529,7 +747,7 @@ function openUserscript() {
 function renderSubmit() {
   const a = state.album;
   pushJob();
-  const steps = SUBMIT_ORDER.filter((k) => state.matches[k]);
+  const steps = submitOrder().filter((k) => state.matches[k]);
   const relMbid = state.matches.release?.selected;
   const unresolved = steps.some((k) => effective(k) === 'ambiguous');
 
@@ -564,9 +782,13 @@ function renderSubmit() {
         ${relMbid ? '' : '<p class="note" style="margin-bottom:0">Needs a release ID first.</p>'}
       </div>
     </div>
+    <div class="card pad picard" id="picard-card"></div>
+    <div class="card pad" id="lidarr-card" style="margin-top:16px"></div>
+    <div class="card pad" id="genre-card" style="margin-top:16px"></div>
   </section>
-  <div class="actionbar"><div class="inner"><button class="btn" id="back">${ICON.back} Back to review</button><span></span></div></div>`;
+  <div class="actionbar"><div class="inner"><div style="display:flex;gap:8px"><button class="btn" id="back">${ICON.back} Back to review</button>${batchBar()}</div>${state.batchCtx ? `<button class="btn primary" id="bt-next" title="Open the next album in the Create on MB list">Next to create ${ICON.chev}</button>` : '<span></span>'}</div></div>`;
 
+  wireBatchBar();
   $('#back').addEventListener('click', () => go('review'));
   $('#recheck').addEventListener('click', async (e) => {
     busy(e.currentTarget, true, 'Checking…');
@@ -579,14 +801,178 @@ function renderSubmit() {
   $$('[data-create]').forEach((b) => b.addEventListener('click', () => createEntity(b.dataset.create)));
   $$('[data-review]').forEach((b) => b.addEventListener('click', () => go('review')));
   wireCover();
+  renderPicardCard();
+  loadPicardStatus();
+  renderLidarrCard();
+  renderGenreCard();
   const cov = $('#cover-open');
   if (cov) cov.addEventListener('click', () => window.open(`https://musicbrainz.org/release/${relMbid}/add-cover-art`, '_blank', 'noopener'));
   const coll = $('#coll');
   if (coll) coll.addEventListener('click', openCollections);
 }
 
+// ---------------------------------------------------------------- Music Genre Enforcer
+// FilesToMB only calls the enforcer's API: it stays the source of truth for artist genres and writes the tags.
+state.enf = null;
+async function loadEnforcerStatus() {
+  try { state.enf = await api('GET', '/api/enforcer/status'); } catch { state.enf = null; }
+  renderChrome();
+}
+
+// The review form for one artist, used on the Submit screen and in the Genres queue.
+async function mountGenreReview(el, name, { onSaved, onSkip } = {}) {
+  el.innerHTML = `<div class="artist-name" style="font:600 1.2rem var(--display, inherit)">${esc(name)}</div>
+    <div class="note" id="gr-peek">Reading tags on disk…</div>
+    <div class="inline-actions" style="margin:8px 0"><button class="btn small" id="gr-lfm" ${state.enf?.lastfm ? '' : 'disabled title="Add a Last.fm key in Music Genre Enforcer settings"'}>Check Last.fm</button></div>
+    <div id="gr-lfmres" class="note"></div>
+    <div class="note" style="margin-top:10px">Your genres</div>
+    <div class="gchips" id="gr-chips"></div>
+    <form id="gr-form" style="margin-top:10px"><input id="gr-input" placeholder="Type a genre, or pick one above" autocomplete="off">
+      <div class="inline-actions" style="margin-top:10px">${onSkip ? '<button type="button" class="btn ghost" id="gr-skip">Skip</button>' : ''}<button class="btn primary" type="submit">Save${onSaved ? ' &amp; apply' : ''}</button></div>
+      <p class="note">Single genre only, no ; | /${state.enf?.dry_run ? ' · <b style="color:var(--warn)">The enforcer is in dry-run mode: tags won\'t actually be written.</b>' : ''}</p></form>`;
+  const input = $('#gr-input', el); const chips = $('#gr-chips', el);
+  let genres = []; const suggested = new Set();
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    const list = genres.filter((g) => !q || g.genre.toLowerCase().includes(q));
+    chips.innerHTML = list.map((g) => `<button type="button" class="gchip ${suggested.has(g.genre) ? 'on' : ''}" data-g="${esc(g.genre)}">${esc(g.genre)} <small>${g.count}</small></button>`).join('') || '<span class="note">No matching genres yet. Type a new one.</span>';
+  };
+  input.addEventListener('input', draw);
+  chips.addEventListener('click', (e) => { const b = e.target.closest('[data-g]'); if (b) { input.value = b.dataset.g; draw(); input.focus(); } });
+  $('#gr-skip', el)?.addEventListener('click', onSkip);
+  $('#gr-lfm', el).addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true, 'Checking…');
+    try {
+      const r = await api('GET', `/api/enforcer/lastfm?name=${encodeURIComponent(name)}`);
+      const known = new Map(genres.map((g) => [g.genre.toLowerCase(), g.genre]));
+      $('#gr-lfmres', el).innerHTML = r.tags.length ? `Last.fm says: ${r.tags.map((t) => { const k = known.get(t.name.toLowerCase()); return `<button type="button" class="gchip ${k ? 'on' : ''}" data-lfm="${esc(k || t.name)}">${k ? '✓ ' : ''}${esc(k || t.name)} <small>${t.count}</small></button>`; }).join(' ')}` : 'Last.fm has no tags for this artist.';
+    } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
+  $('#gr-lfmres', el).addEventListener('click', (e) => { const b = e.target.closest('[data-lfm]'); if (b) { input.value = b.dataset.lfm; draw(); input.focus(); } });
+  $('#gr-form', el).addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const genre = input.value.trim(); if (!genre) { onSkip?.(); return; }
+    const btn = $('button[type=submit]', el); busy(btn, true, 'Saving…');
+    try {
+      const { job } = await api('PUT', '/api/enforcer/genre', { name, genre, apply: true });
+      toast(`${name} → ${genre}`, 'ok');
+      await waitEnforcerJob(job, el);
+      loadEnforcerStatus();
+      onSaved?.(genre);
+    } catch (err) { busy(btn, false); toast(err.message, 'error'); }
+  });
+  try {
+    const info = await api('GET', `/api/enforcer/artist?name=${encodeURIComponent(name)}`);
+    genres = info.genres; draw();
+    const peek = await api('GET', `/api/enforcer/peek?name=${encodeURIComponent(name)}`);
+    const known = new Map(genres.map((g) => [g.genre.toLowerCase(), g.genre]));
+    peek.genres.forEach((g) => { const k = known.get(g.genre.toLowerCase()); if (k) suggested.add(k); });
+    $('#gr-peek', el).innerHTML = peek.total ? `Tags currently on disk: ${peek.genres.map((g) => `<b>${esc(g.genre)}</b> ×${g.count}`).join(', ')} <small>(${peek.sampled < peek.total ? `sampled ${peek.sampled}/${peek.total}` : peek.total} files)</small>` : 'No audio files found in this artist folder.';
+    draw();
+  } catch (err) { const p = $('#gr-peek', el); if (p) p.textContent = err.message; }
+  input.focus();
+}
+
+async function waitEnforcerJob(job, el) {
+  if (!job) return;
+  const note = document.createElement('div'); note.className = 'note'; el.appendChild(note);
+  for (let i = 0; i < 120; i += 1) {
+    const { job: j } = await api('GET', '/api/enforcer/job');
+    if (!j || j.id !== job.id) break;
+    note.textContent = j.state === 'running' ? `Applying tags… ${j.done_artists}/${j.total_artists}` : '';
+    if (j.state !== 'running') {
+      toast(j.state === 'done' ? `Tagged ${j.totals.changed} of ${j.totals.files} files${j.dry_run ? ' (dry run, nothing written)' : ''}.` : `Apply ${j.state}${j.message ? ': ' + j.message : ''}`, j.state === 'done' ? 'ok' : 'error');
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+// Submit screen: after Picard + Lidarr, tell the enforcer and review the artist here if it's new.
+state.genreCard = { forPath: null, artist: null, status: null };
+async function renderGenreCard(notifyNow = false) {
+  const el = $('#genre-card'); if (!el) return;
+  const G = state.genreCard;
+  if (!state.enf) await loadEnforcerStatus();
+  if (!state.enf?.configured) { el.innerHTML = '<h3>Genre</h3><p class="note">Music Genre Enforcer isn\'t set up. Add its URL in Settings to set the artist\'s genre here.</p>'; return; }
+  if (!state.enf.reachable) { el.innerHTML = `<h3>Genre</h3><p class="note">Couldn't reach Music Genre Enforcer. ${esc(state.enf.error || '')}</p>`; return; }
+  const folder = state.lidarr?.chosen;
+  if (!folder) { el.innerHTML = '<h3>Genre</h3><p class="note">Use “Find where Picard saved it” above first; the artist is worked out from where the files landed.</p>'; return; }
+  if (G.forPath !== folder) {
+    el.innerHTML = '<h3>Genre</h3><p class="note"><span class="spinner"></span> Checking…</p>';
+    try {
+      G.artist = (await api('GET', `/api/enforcer/for-folder?path=${encodeURIComponent(folder)}`)).name;
+      if (notifyNow) { try { await api('POST', '/api/enforcer/notify'); } catch { /* shown below via status */ } }
+      G.status = await api('GET', `/api/enforcer/artist?name=${encodeURIComponent(G.artist)}`);
+      G.forPath = folder;
+    } catch (err) { el.innerHTML = `<h3>Genre</h3><p class="note">${esc(err.message)}</p>`; return; }
+  }
+  if (G.status.genre) {
+    el.innerHTML = `<h3>Genre</h3><p><b>${esc(G.artist)}</b> is set to <b>${esc(G.status.genre)}</b>. Music Genre Enforcer will tag the new files itself within a few minutes.</p>
+      <div class="inline-actions"><button class="btn small" id="gn-ping">Tell it now</button><button class="btn small ghost" id="gn-change">Change genre</button></div>`;
+    $('#gn-ping').addEventListener('click', async (e) => { const b = e.currentTarget; busy(b, true, 'Telling…'); try { await api('POST', '/api/enforcer/notify'); toast('Told Music Genre Enforcer to rescan.', 'ok'); } catch (err) { toast(err.message, 'error'); } busy(b, false); });
+    $('#gn-change').addEventListener('click', () => { G.status.genre = ''; renderGenreCard(); });
+    return;
+  }
+  el.innerHTML = '<h3>Genre</h3><p class="note">New artist: it needs a genre before Music Genre Enforcer can tag it.</p><div id="gn-review"></div>';
+  mountGenreReview($('#gn-review'), G.artist, { onSaved: (genre) => { G.status.genre = genre; renderGenreCard(); } });
+}
+
+// The Genres view: every artist still waiting for a genre, one at a time.
+state.genresView = { skipped: new Set() };
+async function renderGenres() {
+  app().innerHTML = '<section class="view"><div class="page-head"><div><h2>New artists</h2><p>Artists in your library that Music Genre Enforcer hasn\'t got a genre for yet.</p></div></div><div id="gv" class="card pad"><span class="spinner"></span></div></section>';
+  try {
+    const { artists } = await api('GET', '/api/enforcer/queue');
+    const queue = artists.filter((a) => !state.genresView.skipped.has(a.name));
+    const box = $('#gv');
+    if (!queue.length) {
+      box.innerHTML = `<h3>${artists.length ? 'All remaining artists skipped' : 'Every artist has a genre'}</h3><p class="note">${artists.length ? `${artists.length} still need one.` : 'New artists show up here after Picard saves them.'}</p>${state.genresView.skipped.size ? '<button class="btn" id="gv-unskip">Review skipped</button>' : ''}`;
+      $('#gv-unskip')?.addEventListener('click', () => { state.genresView.skipped.clear(); renderGenres(); });
+      loadEnforcerStatus(); return;
+    }
+    const cur = queue[0];
+    box.innerHTML = `<p class="note">${queue.length} to go · folder group ${esc(cur.group)}</p><div id="gv-review"></div>`;
+    mountGenreReview($('#gv-review'), cur.name, { onSaved: () => renderGenres(), onSkip: () => { state.genresView.skipped.add(cur.name); renderGenres(); } });
+  } catch (err) { $('#gv').innerHTML = `<p class="note">${esc(err.message)}</p>`; }
+}
+
+// Lidarr: after Picard has saved the album, register the exact release and let Lidarr map the files in place.
+state.lidarr = { configured: null, folders: null, chosen: '', result: null, working: false };
+async function renderLidarrCard() {
+  const el = $('#lidarr-card'); if (!el) return;
+  const L = state.lidarr; const rel = state.matches?.release?.selected;
+  if (L.forPath !== state.album.path) Object.assign(L, { forPath: state.album.path, folders: null, chosen: '', result: null });
+  if (L.configured === null) { try { L.configured = (await api('GET', '/api/lidarr/status')).configured; } catch { L.configured = false; } }
+  if (!L.configured) { el.innerHTML = '<h3>Lidarr</h3><p class="note">Not set up. Add the URL, API key and root folder in Settings to hand finished albums to Lidarr.</p>'; return; }
+  const folders = L.folders;
+  el.innerHTML = `<h3>Lidarr</h3>
+    <p class="note">After Picard has saved the album: add it to Lidarr by this exact release, then Lidarr rescans where Picard put the files. Nothing is moved or renamed.</p>
+    <div class="inline-actions">
+      <button class="btn small" id="ld-find" ${rel ? '' : 'disabled'}>${ICON.search} Find where Picard saved it</button>
+      ${folders && folders.length ? `<select id="ld-folder">${folders.map((f) => `<option ${f === L.chosen ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+        <button class="btn small" id="ld-dry">Check only</button><button class="btn small primary" id="ld-send">Add to Lidarr</button>` : ''}
+    </div>
+    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first.</p>' : ''}
+    ${rel ? '' : '<p class="note">Needs a release ID first.</p>'}
+    ${L.result ? `<div class="note" style="margin-top:10px"><b style="color:var(${L.result.ok ? '--ok' : '--warn'})">${esc(L.result.summary)}</b>${L.result.dry_run ? ' (check only, nothing changed)' : ''}<br>${L.result.steps.map(esc).join(' → ')}${L.result.url ? ` <a href="${esc(L.result.url)}" target="_blank" rel="noopener">Open in Lidarr</a>` : ''}</div>` : ''}`;
+  $('#ld-find')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true, 'Looking…');
+    try { L.folders = (await api('POST', '/api/lidarr/locate', { release_mbid: rel })).folders; L.chosen = L.folders[0] || ''; L.result = null; } catch (err) { toast(err.message, 'error'); }
+    renderLidarrCard(); renderGenreCard();
+  });
+  const go = (dry) => async (e) => {
+    const btn = e.currentTarget; L.chosen = $('#ld-folder').value; busy(btn, true, dry ? 'Checking…' : 'Sending…');
+    try { L.result = await api('POST', '/api/lidarr/send', { path: L.chosen, release_mbid: rel, dry_run: dry }); } catch (err) { L.result = { ok: false, summary: err.message, steps: [] }; }
+    renderLidarrCard(); if (L.result?.ok && !dry) renderGenreCard(true);
+  };
+  $('#ld-dry')?.addEventListener('click', go(true));
+  $('#ld-send')?.addEventListener('click', go(false));
+}
+
 function timelineStep(key, n, isNext) {
-  const info = ENTITIES[key];
+  const info = entityInfo(key);
   const m = state.matches[key];
   const status = effective(key);
   let body = '';
@@ -605,7 +991,7 @@ function timelineStep(key, n, isNext) {
 
 async function createEntity(key) {
   const a = state.album;
-  if (key === 'artist') return seedUrl('artist', '/api/seed/artist', { name: a.artist });
+  if (isArtistKey(key)) return seedUrl(key, '/api/seed/artist', { name: artistNames()[artistIndex(key)] });
   if (key === 'label') return seedUrl('label', '/api/seed/label', { name: a.label });
   if (key === 'release-group') return releaseGroupDialog();
   if (key === 'release') return releaseDialog();
@@ -644,7 +1030,7 @@ function releaseGroupDialog() {
   $('#rg-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const body = { title: a.title, artist: a.artist, primary_type: f.get('primary_type'), secondary_types: f.getAll('sec'), disambiguation: f.get('disambiguation'), edit_note: f.get('edit_note') };
+    const body = { title: a.title, artist: a.artist, artists: isSplit() ? artistNames() : [], join_phrase: joinPhrase(), primary_type: f.get('primary_type'), secondary_types: f.getAll('sec'), disambiguation: f.get('disambiguation'), edit_note: f.get('edit_note') };
     closeDialog();
     seedUrl('release-group', '/api/seed/release-group', body);
   });
@@ -689,13 +1075,385 @@ function releaseDialog() {
       const sel = (k) => state.matches[k]?.selected || null;
       const { action, fields } = await api('POST', '/api/seed/release', {
         album: { title: a.title, artist: a.artist, date: a.date, label: a.label, catalog_number: a.catalog_number, barcode: a.barcode, tracks: a.tracks },
-        release_group_mbid: sel('release-group'), artist_mbid: sel('artist'), label_mbid: sel('label'), details,
+        release_group_mbid: sel('release-group'), artist_mbid: sel('artist'), artists: artistKeys().map((k) => ({ name: artistNames()[artistIndex(k)], mbid: sel(k) })), join_phrase: joinPhrase(), label_mbid: sel('label'), details,
       });
       postForm(w, action, fields);
       state.opened.release = true;
       renderSubmit();
     } catch (err) { w.close(); toast(err.message, 'error'); }
   });
+}
+
+
+// ---------------------------------------------------------------- Library (batch mode)
+// Point it at a folder like "Unmanaged": find every album, match each against
+// MusicBrainz, then triage into Ready / Review / Missing. Matching is read-only;
+// only the Ready tab can ever move files, and only through a gated, verified run.
+const LIB_TABS = [
+  ['ready', 'Ready', 'Matches a release exactly. Eligible for tagging in Picard.'],
+  ['review', 'Review', 'Close but not exact, or several identical editions. You decide.'],
+  ['missing', 'Create on MB', 'Not on MusicBrainz. Work through these to create them.'],
+  ['processing', 'Processing', 'Being tagged and saved by Picard right now.'],
+  ['in_picard', 'In Picard', 'Tagged and loaded in Picard.'],
+  ['done', 'Done', 'Finished.'],
+  ['problem', 'Problems', 'Something went wrong. Check these first.'],
+  ['skipped', 'Skipped', 'You skipped these.'],
+  ['pending', 'Waiting', 'Found but not matched yet.'],
+];
+const PILL_FOR = { ready: 'existing', review: 'ambiguous', missing: 'missing', in_picard: 'existing', done: 'existing', problem: 'missing', skipped: 'unchecked', pending: 'unchecked', processing: 'ambiguous' };
+const LABEL_FOR = { ready: 'Ready', review: 'Review', missing: 'Create on MB', in_picard: 'In Picard', done: 'Done', problem: 'Problem', skipped: 'Skipped', pending: 'Waiting', processing: 'Processing' };
+
+state.lib = { dismissed: '', root: null, tab: 'ready', albums: [], counts: null, status: null, q: '', roots: [], timer: null, sig: '', shown: 100 };
+
+async function openLibrary(root) {
+  state.lib.root = root || null;
+  state.lib.tab = 'ready';
+  state.lib.albums = [];
+  state.lib.counts = null;
+  state.lib.shown = 100;
+  go('library');
+}
+
+function libStop() { clearInterval(state.lib.timer); state.lib.timer = null; }
+
+async function renderLibrary() {
+  const lib = state.lib;
+  libStop();
+  if (!lib.root) return renderLibraryHome();
+  app().innerHTML = `<section class="view" id="lib">
+    <div class="page-head"><div><h2>${esc(lib.root.split('/').slice(-1)[0])}</h2><p class="note">${esc(lib.root)}</p></div>
+      <div class="lib-actions" id="lib-actions"></div></div>
+    <div id="lib-job"></div>
+    <div class="lib-tiles" id="lib-tiles"></div>
+    <div class="card toolbar" style="margin-top:14px"><input class="search" id="lib-q" type="text" placeholder="Filter by artist, title or path…" style="max-width:none;flex:1" value="${esc(lib.q)}" aria-label="Filter albums"></div>
+    <div id="lib-list" class="lib-list"></div>
+  </section>`;
+  $('#lib-q').addEventListener('input', debounce((e) => { lib.q = e.target.value; lib.shown = 100; loadLibraryList(); }, 250));
+  try { await api('POST', '/api/batch/reconcile', { path: lib.root }); } catch { /* a job may be running */ }
+  await refreshLibraryStatus(true);
+  const total = lib.counts?.total || 0;
+  if (!total && !lib.status?.busy) await libRun('/api/batch/discover', {}, 'Scanning for albums…');
+  lib.timer = setInterval(() => { if (state.view === 'library' && !document.hidden) refreshLibraryStatus(false); }, 2000);
+}
+
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+async function renderLibraryHome() {
+  let roots = [];
+  try { roots = (await api('GET', '/api/batch/roots')).roots; } catch { /* none yet */ }
+  app().innerHTML = `<section class="view">
+    <div class="page-head"><div><h2>Library batch</h2><p>Point FilesToMB at a folder such as <b>Unmanaged</b> and it will find every album, check each against MusicBrainz, and sort them into <b>Ready</b>, <b>Review</b> and <b>Create on MB</b>.</p></div></div>
+    <div class="card pad">
+      <h3>How it stays safe</h3>
+      <ul class="safe-list">
+        <li><b>Finding and matching never change a file.</b> They only read tags and ask MusicBrainz.</li>
+        <li><b>“Ready” is strict:</b> every file must match a track on one specific release, with agreeing titles, lengths and artist. Anything less goes to Review or Create.</li>
+        <li><b>Only Ready albums can be processed</b>, one at a time, with a trial of one first. Each is re-checked, verified after Picard saves it, and the whole batch stops at the first problem.</li>
+        <li><b>Nothing is ever deleted.</b> Every action is written to an audit log.</li>
+      </ul>
+      <button class="btn primary" id="lib-pick">${ICON.folder} Choose a folder to batch…</button>
+    </div>
+    ${roots.length ? `<h3 style="margin:22px 0 10px">Recent batches</h3><div class="folder-grid">${roots.map((r) => `<div class="folder-wrap"><button class="folder album" data-root="${esc(r.path)}" style="padding-right:18px"><span class="ico">${ICON.box}</span><span class="name">${esc(r.path)}<small style="display:block;color:var(--muted)">${r.albums} album${r.albums === 1 ? '' : 's'}</small></span></button></div>`).join('')}</div>` : ''}
+  </section>`;
+  $('#lib-pick').addEventListener('click', () => { toast('Browse to the folder, then press “Batch this folder”.'); go('browse'); });
+  $$('[data-root]').forEach((b) => b.addEventListener('click', () => openLibrary(b.dataset.root)));
+}
+
+async function refreshLibraryStatus(forceList) {
+  const lib = state.lib;
+  if (!lib.root) return;
+  try { lib.status = await api('GET', `/api/batch/status?root=${encodeURIComponent(lib.root)}`); } catch { return; }
+  lib.counts = lib.status.counts;
+  const sig = JSON.stringify([lib.counts, lib.status.phase]);
+  renderLibraryChrome();
+  const wasMatching = lib.sig.includes('"matching"') || lib.sig.includes('"processing"');
+  if (forceList || sig !== lib.sig) {
+    lib.sig = sig;
+    // After a run finishes, land on the first tab that has something in it.
+    if (wasMatching && !lib.status.busy && !(lib.counts?.[lib.tab])) {
+      const first = ['ready', 'review', 'missing', 'problem', 'in_picard', 'done'].find((k) => lib.counts?.[k]);
+      if (first) lib.tab = first;
+    }
+    await loadLibraryList();
+  }
+}
+
+function renderLibraryChrome() {
+  const lib = state.lib, st = lib.status, c = lib.counts || {};
+  if (!$('#lib-tiles')) return;
+  $('#lib-tiles').innerHTML = LIB_TABS.filter(([k]) => !['pending', 'processing'].includes(k) || c[k]).map(([k, label, hint]) => `<button class="tile ${lib.tab === k ? 'on' : ''} t-${k}" data-tab="${k}" title="${esc(hint)}"><b>${c[k] || 0}</b><span>${label}</span></button>`).join('');
+  $$('#lib-tiles [data-tab]').forEach((b) => b.addEventListener('click', () => { lib.tab = b.dataset.tab; lib.shown = 100; renderLibraryChrome(); loadLibraryList(); }));
+
+  const busyNow = st?.busy;
+  $('#lib-actions').innerHTML = `
+    ${c.pending ? `<button class="btn ${c.total && !busyNow ? 'primary' : ''}" id="lib-match" ${busyNow ? 'disabled' : ''}>${ICON.search} Match ${c.pending} album${c.pending === 1 ? '' : 's'}</button>` : ''}
+    <button class="btn" id="lib-process" ${busyNow || !(c.ready) ? 'disabled' : ''} title="${c.ready ? 'Tag and save the Ready albums through Picard' : 'Nothing is Ready yet'}">${ICON.release} Process Ready (${c.ready || 0})…</button>
+    <button class="btn ghost" id="lib-rescan" ${busyNow ? 'disabled' : ''} title="Look for new album folders">Rescan folders</button>
+    <button class="btn ghost" id="lib-more" title="More actions">⋯</button>`;
+  $('#lib-match')?.addEventListener('click', () => libRun('/api/batch/match', {}, 'Matching…'));
+  $('#lib-process')?.addEventListener('click', openProcessDialog);
+  $('#lib-rescan')?.addEventListener('click', () => libRun('/api/batch/discover', {}, 'Scanning…'));
+  $('#lib-more')?.addEventListener('click', openLibraryMore);
+
+  // Live job panel.
+  const job = $('#lib-job');
+  if (!st || (!busyNow && (!st.last_result || st.last_result === lib.dismissed))) { job.innerHTML = ''; return; }
+  const p = st.progress || {};
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+  const stopped = st.last_result?.startsWith('Stopped') || st.last_result?.includes('unexpected');
+  job.innerHTML = `<div class="card pad job ${stopped && !busyNow ? 'err' : ''}">
+    <div class="job-head"><b>${busyNow ? ({ discovering: 'Scanning folders', matching: 'Matching with MusicBrainz', processing: 'Processing through Picard' }[st.phase] || 'Working') : (stopped ? 'Stopped' : 'Last run')}</b>
+      ${busyNow ? `<span class="note">${p.done || 0} / ${p.total || 0}</span><button class="btn small" id="lib-stop">${st.stop_requested ? 'Stopping…' : 'Stop'}</button>` : `<button class="btn small ghost" id="lib-dismiss">Dismiss</button>`}</div>
+    ${busyNow && p.total ? `<div class="bar" style="height:8px;margin:8px 0"><i style="width:${pct}%"></i></div>` : ''}
+    ${busyNow && p.current ? `<div class="note job-cur">${esc(p.current.slice(state.lib.root.length + 1))}</div>` : ''}
+    ${!busyNow && st.last_result ? `<div class="${stopped ? 'job-err' : ''}">${esc(st.last_result)}</div>` : ''}
+    ${(st.events || []).length && (busyNow || stopped) ? `<div class="job-log">${st.events.slice(-6).map((e) => `<div class="ev ${e.level}">${esc(e.message)}</div>`).join('')}</div>` : ''}
+  </div>`;
+  $('#lib-stop')?.addEventListener('click', async () => { await api('POST', '/api/batch/stop'); refreshLibraryStatus(false); });
+  $('#lib-dismiss')?.addEventListener('click', () => { lib.dismissed = st.last_result; job.innerHTML = ''; });
+}
+
+async function libRun(url, extra, label) {
+  try {
+    await api('POST', url, { path: state.lib.root, ...extra });
+    state.lib.dismissed = '';
+    toast(label);
+    await refreshLibraryStatus(true);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function loadLibraryList() {
+  const lib = state.lib;
+  const host = $('#lib-list');
+  if (!host || !lib.root) return;
+  try {
+    const q = new URLSearchParams({ root: lib.root, status: lib.tab, limit: String(lib.shown), q: lib.q });
+    const data = await api('GET', `/api/batch/albums?${q}`);
+    lib.albums = data.albums;
+    lib.counts = data.counts;
+  } catch (e) { host.innerHTML = `<div class="empty card pad">${esc(e.message)}</div>`; return; }
+  renderLibraryChrome();
+  const hint = LIB_TABS.find(([k]) => k === lib.tab)?.[2];
+  if (!lib.albums.length) { host.innerHTML = `<div class="empty card pad"><p>${lib.q ? 'No albums match that filter.' : `Nothing in “${LIB_TABS.find(([k]) => k === lib.tab)?.[1]}”.`}</p><p class="note">${esc(hint || '')}</p></div>`; return; }
+  host.innerHTML = `<p class="hint" style="margin:14px 0 8px">${esc(hint || '')}</p>` + lib.albums.map(libRow).join('') +
+    ((lib.counts[lib.tab] || 0) > lib.albums.length ? `<div style="text-align:center;margin:14px"><button class="btn" id="lib-more-rows">Show more (${(lib.counts[lib.tab] || 0) - lib.albums.length} left)</button></div>` : '');
+  $('#lib-more-rows')?.addEventListener('click', () => { lib.shown += 200; loadLibraryList(); });
+  $$('#lib-list [data-act]').forEach((b) => b.addEventListener('click', () => libAct(b)));
+}
+
+const relPath = (a) => a.path.slice(state.lib.root.length + 1);
+
+function libRow(a) {
+  const heading = a.title ? `${esc(a.artist)} — ${esc(a.title)}${a.year ? ` <span class="note">(${esc(a.year)})</span>` : ''}` : esc(relPath(a).split('/').slice(-2).join(' / '));
+  const meta = `${a.tracks ? `${a.tracks} track${a.tracks === 1 ? '' : 's'}` : ''}${a.duration_ms ? ` · ${fmtLen(a.duration_ms)}` : ''}`;
+  const cands = a.verdict?.candidates || [];
+  let body = '';
+  if (a.status === 'review') {
+    body = `<div class="cands-mini">${cands.slice(0, 4).map((c) => `<div class="cmini ${c.confident ? 'ok' : ''}">
+      <div class="cinfo"><a href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener"><b>${esc(c.title)}</b></a> <span class="note">${esc(c.artist)} · ${esc(c.date || '?')} ${esc(c.country || '')} · ${c.track_count} tracks</span>
+        <div class="note">${c.confident ? 'Every file matches a track on this release.' : c.track_exact ? `The tracks match exactly, but ${esc(c.problems.join('; '))}.` : esc(c.problems.join('; '))}</div></div>
+      <button class="btn small ${c.confident ? 'primary' : ''}" data-act="use" data-path="${esc(a.path)}" data-mbid="${c.mbid}" ${c.confident || c.track_exact ? '' : 'disabled title="Not a complete match. Open the album to handle it by hand."'}>Use this</button></div>`).join('')}</div>`;
+  } else if (a.status === 'ready' && cands[0]) {
+    const c = cands.find((x) => x.mbid === a.release_mbid) || cands[0];
+    body = `<div class="note">→ <a href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener">${esc(c.title)}</a> · ${esc(c.date || '?')} ${esc(c.country || '')} · ${c.track_count} tracks · ${esc(a.message || '')}</div>`;
+  } else if (a.message) {
+    body = `<div class="note">${esc(a.message)}</div>`;
+  }
+  // Before creating something, see what's already closest on MusicBrainz: this is how duplicates get avoided.
+  if (a.status === 'missing' && cands.length) {
+    body += `<div class="closest note">Closest on MusicBrainz: ${cands.slice(0, 2).map((c) => `<a href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener">${esc(c.artist)} — ${esc(c.title)}</a> (${c.track_count} tracks, ${Math.round(c.coverage_local * 100)}% of your files)`).join(' · ')}</div>`;
+  }
+  const acts = [];
+  acts.push(`<button class="btn small ${a.status === 'missing' ? 'primary' : ''}" data-act="open" data-path="${esc(a.path)}">${a.status === 'missing' ? 'Create…' : 'Open'}</button>`);
+  if (['missing', 'problem', 'skipped', 'review'].includes(a.status)) acts.push(`<button class="btn small ghost" data-act="reset" data-path="${esc(a.path)}" title="Check MusicBrainz again">Re-check</button>`);
+  if (['review', 'ready', 'missing'].includes(a.status)) acts.push(`<button class="btn small ghost" data-act="skip" data-path="${esc(a.path)}">Skip</button>`);
+  if (a.status === 'review') acts.push(`<button class="btn small ghost" data-act="missing" data-path="${esc(a.path)}" title="None of these are right">Not on MB</button>`);
+  return `<div class="card lrow"><div class="lmain"><div class="lhead"><span class="pill ${PILL_FOR[a.status]}">${LABEL_FOR[a.status]}</span><b class="ltitle">${heading}</b><span class="note">${meta}</span></div>
+    <div class="lpath">${esc(relPath(a))}</div>${body}</div><div class="lacts">${acts.join('')}</div></div>`;
+}
+
+async function libAct(btn) {
+  const path = btn.dataset.path, act = btn.dataset.act;
+  if (act === 'open') return openFromBatch(path);
+  busy(btn, true, '');
+  try {
+    await api('POST', '/api/batch/resolve', { path, action: act, release_mbid: btn.dataset.mbid });
+    if (act === 'reset') await libRun('/api/batch/match', {}, 'Re-checking…');
+    else { toast(act === 'use' ? 'Marked Ready with the release you picked.' : 'Updated.', 'ok'); await refreshLibraryStatus(true); }
+  } catch (e) { busy(btn, false); toast(e.message, 'error'); }
+}
+
+// Open one album in the normal Review → Submit flow, remembering we came from the batch.
+async function openFromBatch(path) {
+  state.batchCtx = { root: state.lib.root, tab: state.lib.tab };
+  libStop();
+  await scan(path);
+}
+
+async function nextInQueue() {
+  const ctx = state.batchCtx;
+  if (!ctx) return;
+  try {
+    const { albums } = await api('GET', `/api/batch/albums?root=${encodeURIComponent(ctx.root)}&status=missing&limit=500`);
+    const current = state.album?.path;
+    const idx = albums.findIndex((a) => a.path === current);
+    const next = albums.slice(idx + 1).concat(albums.slice(0, Math.max(idx, 0))).find((a) => a.path !== current);
+    if (!next) { toast('That was the last one in the “Create on MB” list.', 'ok'); return openLibrary(ctx.root); }
+    state.batchCtx = ctx;
+    await scan(next.path);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function batchBar() {
+  if (!state.batchCtx) return '';
+  return `<button class="btn" id="bt-back" title="Back to the batch list">${ICON.back} Batch list</button>`;
+}
+function wireBatchBar() {
+  $('#bt-back')?.addEventListener('click', () => openLibrary(state.batchCtx.root));
+  $('#bt-next')?.addEventListener('click', nextInQueue);
+}
+
+// ---- processing (the only step that moves files)
+async function openProcessDialog() {
+  const lib = state.lib, c = lib.counts || {};
+  await loadPicardStatus(true);
+  const st = state.picard.status;
+  const connected = st?.connected;
+  openDialog(`<form id="proc-form" method="dialog">
+    <div class="dlg-head"><h3>Process ready albums</h3><p>${c.ready || 0} album${c.ready === 1 ? '' : 's'} match a MusicBrainz release exactly.</p></div>
+    <div class="dlg-body">
+      <div class="stepnote"><span class="num">1</span><div>For each album, one at a time: re-check it against MusicBrainz, <b>write the release IDs into the files</b>, load it in Picard, tell Picard to <b>save (rename and move) it</b>, then confirm the files left this folder${lib.status?.dest_configured ? ' and arrived at Picard\'s destination with the right release ID' : ''}.</div></div>
+      <div class="stepnote"><span class="num">2</span><div>The batch <b>stops at the first problem</b>. Nothing is deleted. Every step is written to the audit log.</div></div>
+      ${lib.status?.dest_configured ? '' : '<div class="banner"><span>Picard\'s destination folder isn\'t configured (<code>PICARD_DEST_ROOT</code>), so arrival can\'t be verified, only that the files left.</span></div>'}
+      <label class="field"><span>How many albums</span><select name="limit">
+        <option value="1">1 (a trial run, recommended first)</option>
+        <option value="5">5</option><option value="10">10</option><option value="25">25</option>
+        <option value="${Math.min(c.ready || 1, 500)}">All ${c.ready || 0} ready</option></select></label>
+      <label class="check"><input type="checkbox" name="clear" required> <span>Picard has nothing unsaved that I care about. FilesToMB will <b>clear Picard's file lists</b> first, so “save matched” can only ever touch the album being processed.</span></label>
+      ${connected ? '' : `<div class="banner"><span>${st?.configured ? 'Picard isn\'t reachable right now.' : 'Picard isn\'t linked to FilesToMB (see the README).'}</span></div>`}
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" id="dlg-cancel">Cancel</button><button class="btn primary" type="submit" ${connected ? '' : 'disabled'}>Start processing</button></div></form>`);
+  $('#dlg-cancel').addEventListener('click', closeDialog);
+  $('#proc-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    closeDialog();
+    await libRun('/api/batch/process', { limit: Number(f.get('limit')), clear_picard: !!f.get('clear') }, 'Processing started.');
+  });
+}
+
+function openLibraryMore() {
+  openDialog(`<div class="dlg-head"><h3>More</h3></div><div class="dlg-body"><div class="list">
+    <button id="mo-audit">Audit log: every action taken on your files</button>
+    <button id="mo-clean">Remove empty folders under this batch (only folders with nothing in them)</button>
+    <button id="mo-all">Re-match everything still Waiting, Missing or in Review</button></div></div>
+    <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button></div>`);
+  $('#dlg-cancel').addEventListener('click', closeDialog);
+  $('#mo-audit').addEventListener('click', openAudit);
+  $('#mo-clean').addEventListener('click', async () => {
+    try { const r = await api('POST', '/api/batch/cleanup', { path: state.lib.root }); closeDialog(); toast(`Removed ${r.removed} empty folder${r.removed === 1 ? '' : 's'}.`, 'ok'); } catch (e) { toast(e.message, 'error'); }
+  });
+  $('#mo-all').addEventListener('click', async () => {
+    closeDialog();
+    try {
+      const lists = await Promise.all(['missing', 'review'].map((s) => api('GET', `/api/batch/albums?root=${encodeURIComponent(state.lib.root)}&status=${s}&limit=500`)));
+      const paths = lists.flatMap((l) => l.albums.map((a) => a.path));
+      await libRun('/api/batch/match', { rematch: paths }, `Re-matching ${paths.length} albums…`);
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+
+async function openAudit() {
+  try {
+    const { lines } = await api('GET', '/api/batch/audit');
+    openDialog(`<div class="dlg-head"><h3>Audit log</h3><p>Newest at the bottom. Stored in the /config volume as batch-audit.log.</p></div>
+      <div class="dlg-body"><pre class="audit">${lines.length ? esc(lines.join('\n')) : 'Nothing has been done yet.'}</pre></div>
+      <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button></div>`);
+    $('#dlg-cancel').addEventListener('click', closeDialog);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------- Picard
+async function loadPicardStatus(force = false) {
+  const p = state.picard;
+  if (!force && p.status && Date.now() - p.statusAt < 15000) return;
+  try { p.status = await api('GET', '/api/picard/status'); p.statusAt = Date.now(); } catch { p.status = { configured: false, connected: false, url: '' }; }
+  if (state.view === 'submit') renderPicardCard();
+}
+
+function renderPicardCard() {
+  const host = $('#picard-card');
+  if (!host) return;
+  const p = state.picard;
+  const st = p.status;
+  const rel = state.matches?.release?.selected;
+  const pill = !st ? '' : !st.configured ? '<span class="pill unchecked">Not set up</span>' : st.connected ? '<span class="pill existing">Connected</span>' : '<span class="pill missing">Not reachable</span>';
+  const open = st?.url ? `<a class="btn small" href="${esc(st.url)}" target="_blank" rel="noopener">${ICON.ext} Open Picard</a>` : '';
+  let body = '';
+  if (!st) body = '<div class="skeleton" style="height:44px"></div>';
+  else if (!st.configured) body = '<p class="note">Picard isn\'t linked to FilesToMB. Share Picard\'s runtime folder with this container and set <code>PICARD_PIPE_DIR</code> (see the README) to tag, load and save from here.</p>';
+  else {
+    const step = (n, done, title, detail, action) => `<div class="pstep ${done ? 'done' : ''}"><span class="pnum">${done ? ICON.check : n}</span><div class="pbody"><b>${title}</b><small>${detail}</small></div>${action || ''}</div>`;
+    const sent = p.sent;
+    body = `<div class="psteps">
+      ${step(1, !!sent, 'Tag files and load in Picard', sent ? `${sent.tagged} file${sent.tagged === 1 ? '' : 's'} tagged · ${sent.matched} matched to the release${sent.loaded ? ' · loaded in Picard' : ''}` : 'Writes this release\'s MusicBrainz IDs into the files so Picard puts them straight onto it.', `<button class="btn ${sent ? '' : 'primary'}" id="picard-send" ${rel && st.connected ? '' : 'disabled'} title="${rel ? (st.connected ? '' : 'Picard isn\'t reachable') : 'Needs a release ID first'}">${sent ? 'Redo' : 'Preview &amp; send'}</button>`)}
+      ${step(2, !!sent && p.saved, 'Check it in Picard', 'The files should appear matched under your release. Fix anything odd there.', open)}
+      ${step(3, p.saved, 'Save in Picard', p.saved ? 'Save requested. Picard is rewriting tags and moving files with your own settings, so the folder may have moved.' : 'Saves every matched file currently in Picard (not just this album). Tags, renaming and moving follow your own Picard settings.', `<button class="btn ${sent && !p.saved ? 'primary' : ''}" id="picard-save" ${sent && st.connected ? '' : 'disabled'}>${p.saved ? 'Save again' : 'Save in Picard'}</button>${p.saved ? '<button class="btn" id="picard-clear" title="Remove saved files from Picard\'s album pane">Clear saved</button>' : ''}`)}
+    </div>`;
+  }
+  host.innerHTML = `<div class="picard-head"><h3>Picard</h3>${pill}<span class="note grow">Tag, load and save in your Picard without leaving FilesToMB.</span><button class="btn small ghost" id="picard-refresh" title="Re-check the connection">Refresh</button></div>${body}`;
+  $('#picard-refresh')?.addEventListener('click', () => loadPicardStatus(true));
+  $('#picard-send')?.addEventListener('click', openPicardPlan);
+  $('#picard-save')?.addEventListener('click', picardSave);
+  $('#picard-clear')?.addEventListener('click', picardClear);
+}
+
+async function openPicardPlan() {
+  const rel = state.matches.release?.selected;
+  openDialog('<div class="dlg-head"><h3>Matching tracks…</h3></div><div class="dlg-body"><div class="scanning" style="padding:30px 0"><span class="spinner"></span></div></div>');
+  try {
+    const plan = await api('POST', '/api/picard/plan', { path: state.album.path, release_mbid: rel });
+    const bad = plan.pairs.filter((x) => !x.match).length;
+    const connected = state.picard.status?.connected;
+    openDialog(`<div class="dlg-head"><h3>Tag files for Picard</h3><p>${esc(plan.release.artist)} · ${esc(plan.release.title)}${plan.release.date ? ` (${esc(plan.release.date)})` : ''} · ${plan.release.track_count} tracks on MusicBrainz</p></div>
+      <div class="dlg-body">
+        ${plan.complete ? `<div class="banner ok">${ICON.check.replace('<svg', '<svg width="18" height="18"')}<span>Every file matches a track on the release.</span></div>`
+          : `<div class="banner">${ICON.alert.replace('<svg', '<svg width="18" height="18"')}<span>${bad ? `${bad} file${bad === 1 ? '' : 's'} didn't match a track. ` : ''}${plan.unmatched_release_tracks.length ? `${plan.unmatched_release_tracks.length} track${plan.unmatched_release_tracks.length === 1 ? '' : 's'} on the release ${plan.unmatched_release_tracks.length === 1 ? 'has' : 'have'} no file. ` : ''}Picard will still try to match them itself.</span></div>`}
+        <p class="note">Only MusicBrainz ID tags are added. Picard rewrites everything else when you save.</p>
+        <div class="pairs">${plan.pairs.map((x) => `<div class="pair ${x.match ? '' : 'nomatch'}"><span class="l">${x.track_number ? esc(x.track_number.split('/')[0]) + '. ' : ''}${esc(x.title)}</span><span class="arrow">${x.match ? '→' : '✕'}</span><span class="r">${x.match ? `${plan.pairs.some((y) => y.match && y.match.disc > 1) || x.match.disc > 1 ? `${x.match.disc}-` : ''}${x.match.position}. ${esc(x.match.title)} <small>${x.score}%</small>` : 'no matching track'}</span></div>`).join('')}
+          ${plan.unmatched_release_tracks.map((t) => `<div class="pair nomatch"><span class="l">(no file)</span><span class="arrow">✕</span><span class="r">${t.disc > 1 ? `${t.disc}-` : ''}${t.position}. ${esc(t.title)}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="dlg-foot"><button class="btn" id="dlg-cancel">Cancel</button><button class="btn" id="pp-tag" title="Write the IDs but don't touch Picard">Tag files only</button><button class="btn primary" id="pp-send" ${connected ? '' : 'disabled'}>Tag &amp; load in Picard</button></div>`);
+    $('#dlg-cancel').addEventListener('click', closeDialog);
+    const run = (tagOnly) => async (e) => {
+      const btn = e.currentTarget;
+      busy(btn, true, 'Working…');
+      try {
+        const res = await api('POST', '/api/picard/send', { path: state.album.path, release_mbid: rel, tag_only: tagOnly });
+        state.picard.sent = res; state.picard.saved = false;
+        closeDialog(); renderPicardCard();
+        toast(tagOnly ? `Tagged ${res.tagged} files.` : `Tagged ${res.tagged} files and loaded them in Picard.`, 'ok');
+      } catch (err) { busy(btn, false); toast(err.message, 'error'); }
+    };
+    $('#pp-tag').addEventListener('click', run(true));
+    $('#pp-send').addEventListener('click', run(false));
+  } catch (e) { closeDialog(); toast(e.message, 'error'); }
+}
+
+async function picardSave() {
+  const btn = $('#picard-save');
+  busy(btn, true, 'Sending…');
+  try {
+    await api('POST', '/api/picard/save');
+    state.picard.saved = true;
+    toast('Told Picard to save. Watch its window for progress.', 'ok');
+  } catch (e) { toast(e.message, 'error'); }
+  renderPicardCard();
+}
+
+async function picardClear() {
+  try { await api('POST', '/api/picard/clear'); toast('Cleared saved files from Picard.', 'ok'); } catch (e) { toast(e.message, 'error'); }
 }
 
 // ---------------------------------------------------------------- login + collections
@@ -762,6 +1520,15 @@ async function openCollections() {
   } catch (e) { closeDialog(); toast(e.message, 'error'); }
 }
 
+// ---------------------------------------------------------------- navigation
+window.addEventListener('popstate', () => { state.browse = null; go('browse'); });
+document.addEventListener('click', (e) => {
+  const brand = e.target.closest('a.brand');
+  if (!brand || !state.config) return;
+  e.preventDefault();
+  loadBrowse('').then(() => go('browse'));
+});
+
 // ---------------------------------------------------------------- boot
 (async function boot() {
   renderChrome();
@@ -774,5 +1541,7 @@ async function openCollections() {
   if (!state.config.has_contact) toast('Set MB_CONTACT so MusicBrainz can identify this client.', 'warn');
   if (!state.config.library_exists) { app().innerHTML = `<div class="empty card pad"><h2>Music library not found</h2><p>The configured MUSIC_ROOT doesn't exist inside the container. Check the volume mount.</p></div>`; return; }
   refreshAuth();
+  loadEnforcerStatus();
+  try { state.favs = (await api('GET', '/api/favourites')).favourites; } catch { /* favourites are optional */ }
   go('browse');
 })();

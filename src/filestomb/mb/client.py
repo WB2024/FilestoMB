@@ -141,6 +141,35 @@ class MusicBrainzClient:
             for item in data.get("releases", [])
         ]
 
+    async def search_releases_raw(self, title: str, artist: str, limit: int = 10) -> list[dict]:
+        """Release search results as MusicBrainz returns them (with track-count, date, country...)."""
+        query = f'release:"{_escape(title)}" AND artist:"{_escape(artist)}"'
+        data = await self._get("/release", {"query": query, "limit": limit})
+        return data.get("releases", [])
+
+    async def search_release_groups_raw(self, title: str, artist: str, limit: int = 5) -> list[dict]:
+        query = f'releasegroup:"{_escape(title)}" AND artist:"{_escape(artist)}"'
+        data = await self._get("/release-group", {"query": query, "limit": limit})
+        return data.get("release-groups", [])
+
+    async def browse_release_group_releases(self, release_group_mbid: str, limit: int = 100) -> list[dict]:
+        """Every release in a release group, each with its full tracklist, in ONE
+        request. (Fetching editions one by one costs a request, i.e. a second, each.)"""
+        data = await self._get(
+            "/release",
+            {"release-group": release_group_mbid, "inc": "recordings+artist-credits", "limit": limit},
+        )
+        releases = data.get("releases", [])
+        for release in releases:
+            release.setdefault("release-group", {"id": release_group_mbid})
+        return releases
+
+    async def lookup_release(self, mbid: str) -> dict:
+        """Full release (tracklist, recordings, artist credits, release group) by ID."""
+        return await self._get(
+            f"/release/{mbid}", {"inc": "recordings+artist-credits+release-groups+labels"}
+        )
+
     # -- Browse lookups ---------------------------------------------------
     # Search results come from a Solr index that can lag a minute or more
     # behind new edits. Browsing by a parent entity's MBID reads the database

@@ -8,6 +8,12 @@ ENV PYTHONUNBUFFERED=1 \
     HOST=0.0.0.0 \
     PORT=8000
 
+# Archive extraction from the web UI: 7-Zip for zip/7z, libarchive's bsdtar for
+# rar (Debian's 7-Zip can't decompress RAR).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends 7zip libarchive-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src

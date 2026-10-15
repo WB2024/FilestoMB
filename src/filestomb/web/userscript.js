@@ -94,8 +94,9 @@
     pill.addEventListener('click', () => { if (!pill.classList.contains('ok')) send(pill, false); });
     document.body.append(pill);
 
-    const expected = (job.names || {})[entity];
-    if ((job.awaiting || []).includes(entity) && expected && norm(pageName()) === norm(expected)) {
+    // A credit split into several artists lists each name; otherwise the single expected one.
+    const expected = entity === 'artist' && (job.artist_names || []).length ? job.artist_names : [(job.names || {})[entity]].filter(Boolean);
+    if ((job.awaiting || []).includes(entity) && expected.some((n) => norm(pageName()) === norm(n))) {
       pill.textContent = 'Sending to FilesToMB…';
       send(pill, true);
     }

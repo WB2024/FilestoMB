@@ -26,14 +26,20 @@ def _classify(candidates: list[Candidate], entity_type: EntityType, query: str) 
     return result
 
 
-async def match_album(client: MusicBrainzClient, album: Album) -> dict[EntityType, MatchResult]:
+async def match_artists(client: MusicBrainzClient, names: list[str]) -> list[MatchResult]:
+    """One classified artist search per name (for a credit like "A & B")."""
+    return [_classify(await client.search_artist(name), EntityType.ARTIST, name) for name in names]
+
+
+async def match_album(client: MusicBrainzClient, album: Album, skip_artist: bool = False) -> dict[EntityType, MatchResult]:
     """Search MusicBrainz for each entity referenced by `album` and classify
     the results. Callers decide what to do about anything not MATCHED.
     """
     results: dict[EntityType, MatchResult] = {}
 
-    artist_candidates = await client.search_artist(album.artist)
-    results[EntityType.ARTIST] = _classify(artist_candidates, EntityType.ARTIST, album.artist)
+    if not skip_artist:
+        artist_candidates = await client.search_artist(album.artist)
+        results[EntityType.ARTIST] = _classify(artist_candidates, EntityType.ARTIST, album.artist)
 
     if album.label:
         label_candidates = await client.search_label(album.label)

@@ -137,3 +137,34 @@ def test_build_release_seed_form_uses_mbids_when_available() -> None:
         assert 'name="artist_credit.names.0.mbid" value="artist-1"' in html
     finally:
         path.unlink(missing_ok=True)
+
+
+def test_release_seed_with_several_artists_builds_one_joined_credit():
+    from filestomb.models import Album
+    from filestomb.mb import seed
+
+    album = Album(directory=Path("."), title="The Bedroom Recordings", artist="Morrissey & Johnny Marr")
+    fields = seed.build_release_seed_fields(
+        album, artists=[("Morrissey", "aaaaaaaa-1111-1111-1111-111111111111"), ("Johnny Marr", None)], join_phrase=" & "
+    )
+    assert fields["artist_credit.names.0.mbid"] == "aaaaaaaa-1111-1111-1111-111111111111"
+    assert fields["artist_credit.names.0.join_phrase"] == " & "
+    assert fields["artist_credit.names.1.name"] == "Johnny Marr"
+    assert "artist_credit.names.1.join_phrase" not in fields  # nothing joins after the last artist
+    single = seed.build_release_seed_fields(album, artist_mbid="bbbbbbbb-1111-1111-1111-111111111111")
+    assert single["artist_credit.names.0.mbid"] == "bbbbbbbb-1111-1111-1111-111111111111" and "artist_credit.names.1.mbid" not in single
+
+
+def test_release_group_seed_with_several_artists():
+    from urllib.parse import parse_qs, urlparse
+
+    from filestomb.mb import seed
+
+    url = seed.seed_release_group_url("T", "A & B", artists=["A", "B"], join_phrase=" & ")
+    q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+    assert q["edit-release-group.artist_credit.names.0.artist.name"] == "A"
+    assert q["edit-release-group.artist_credit.names.0.join_phrase"] == " & "
+    assert q["edit-release-group.artist_credit.names.1.artist.name"] == "B"
+    assert "edit-release-group.artist_credit.names.1.join_phrase" not in q
+    one = {k: v[0] for k, v in parse_qs(urlparse(seed.seed_release_group_url("T", "Solo")).query).items()}
+    assert one["edit-release-group.artist_credit.names.0.artist.name"] == "Solo" and not any("join_phrase" in k for k in one)

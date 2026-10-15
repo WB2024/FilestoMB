@@ -25,9 +25,13 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .. import coverart, state, tags
+from .. import archives, artwork, coverart, integrations, picard, releasetags, state, tags
+from ..batch import store as batch_store_module
+from ..batch.runner import BatchManager
+from ..paths import config_dir
+from . import batch_api, enforcer_api, lidarr_api
 from ..config import Settings, load_settings
-from ..matching import match_album
+from ..matching import match_album, match_artists
 from ..mb import seed
 from ..mb.client import MusicBrainzClient
 from ..mb.oauth import MusicBrainzOAuth, build_authorize_url
@@ -36,7 +40,7 @@ from ..models import Album, EntityType, Track
 STATIC_DIR = Path(__file__).parent / "static"
 USERSCRIPT_TEMPLATE = Path(__file__).parent / "userscript.js"
 # Bump when userscript.js changes so installed copies auto-update.
-USERSCRIPT_VERSION = "1.1.0"
+USERSCRIPT_VERSION = "1.2.0"
 COVER_MAX_BYTES = 20 * 1024 * 1024
 PICKABLE_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 CAPTURE_ENTITIES = {"artist", "label", "release-group", "release"}
@@ -102,6 +106,8 @@ class MatchIn(BaseModel):
     title: str
     artist: str
     label: str | None = None
+    # When the credit is several artists ("A & B"), the individual names to search for.
+    artists: list[str] = Field(default_factory=list)
 
 
 class NameIn(BaseModel):
@@ -115,6 +121,8 @@ class ReleaseGroupSeedIn(BaseModel):
     primary_type: str | None = None
     secondary_types: list[str] = Field(default_factory=list)
     edit_note: str | None = None
+    artists: list[str] = Field(default_factory=list)
+    join_phrase: str = ""
 
 
 class ReleaseDetailsIn(BaseModel):
@@ -129,10 +137,17 @@ class ReleaseDetailsIn(BaseModel):
     edit_note: str | None = None
 
 
+class ArtistRef(BaseModel):
+    name: str
+    mbid: str | None = None
+
+
 class ReleaseSeedIn(BaseModel):
     album: AlbumIn
     release_group_mbid: str | None = None
     artist_mbid: str | None = None
+    artists: list[ArtistRef] = Field(default_factory=list)
+    join_phrase: str = ""
     label_mbid: str | None = None
     details: ReleaseDetailsIn = Field(default_factory=ReleaseDetailsIn)
 
@@ -150,6 +165,7 @@ class JobIn(BaseModel):
     # names to expect, so the userscript can recognise the new page.
     awaiting: list[str] = Field(default_factory=list)
     names: dict[str, str] = Field(default_factory=dict)
+    artist_names: list[str] = Field(default_factory=list)  # every artist of a split credit
 
 
 class LookupIn(BaseModel):
@@ -167,6 +183,28 @@ class CaptureIn(BaseModel):
 class UseImageIn(BaseModel):
     path: str
     image: str
+
+
+class OnlineCoverIn(BaseModel):
+    path: str
+    url: str
+
+
+class SettingsIn(BaseModel):
+    fanart_api_key: str | None = None
+    lidarr_url: str | None = None
+    lidarr_api_key: str | None = None
+    lidarr_root_folder: str | None = None
+    lidarr_library_path: str | None = None
+    lidarr_auto: str | None = None
+    enforcer_url: str | None = None
+    enforcer_auto: str | None = None
+
+
+class PicardReleaseIn(BaseModel):
+    path: str
+    release_mbid: str
+    tag_only: bool = False
 
 
 class CodeIn(BaseModel):
@@ -323,6 +361,25 @@ def create_app(
     # falls back to auto-detection.
     covers: dict[str, tuple[bytes, str, str]] = {}
 
+    # Batch mode (whole-folder discover / match / process). State lives in /config.
+    batch_db = batch_store_module.BatchStore(config_dir() / "batch.db")
+    batch_db.recover_interrupted()  # a crash mid-processing is never assumed to have finished
+    batch = BatchManager(
+        batch_db,
+        client,
+        root,
+        config_dir() / "batch-audit.log",
+        picard_pipe_dir=settings.picard_pipe_dir,
+        picard_library_root=settings.picard_library_root,
+        dest_root=Path(settings.picard_dest_root) if settings.picard_dest_root else None,
+    )
+
+    app_state_batch = batch  # exposed as app.state.batch below (tests and diagnostics)
+
+    def refuse_during_batch() -> None:
+        if batch.phase == "processing":
+            raise HTTPException(409, "A batch is processing albums through Picard right now. Wait for it to finish or stop it.")
+
     async def cover_for(path: str, directory: Path):
         if path.strip("/") in covers:
             return covers[path.strip("/")]
@@ -359,6 +416,8 @@ def create_app(
             "userscript_version": USERSCRIPT_VERSION,
             "library_name": root.name or str(root),
             "library_exists": root.is_dir(),
+            "can_extract_all": archives.find_sevenzip() is not None,
+            "can_extract_rar": archives.find_bsdtar() is not None or archives.find_sevenzip() is not None,
             "last_path": last_rel,
             "has_contact": settings.has_contact,
             "oauth_configured": settings.has_oauth,
@@ -370,6 +429,43 @@ def create_app(
             },
         }
 
+    # -- Favourites ----------------------------------------------------------
+    # Library-relative folder paths kept in the /config volume, so they follow
+    # the user across browsers and survive container updates.
+
+    def favourites_json() -> dict:
+        items = []
+        for rel in state.load_favourites():
+            try:
+                target = _resolve(root, rel)
+            except HTTPException:
+                continue
+            if target.is_dir():
+                items.append({"path": rel, "name": target.name, "parent": target.parent.name if rel.count("/") else ""})
+        return {"favourites": items}
+
+    @app.get("/api/favourites")
+    async def get_favourites() -> dict:
+        return await asyncio.to_thread(favourites_json)
+
+    @app.post("/api/favourites")
+    async def add_favourite(body: PathIn) -> dict:
+        rel = body.path.strip("/")
+        if not rel:
+            raise HTTPException(422, "The library root can't be a favourite.")
+        if not _resolve(root, rel).is_dir():
+            raise HTTPException(404, "Not a directory.")
+        saved = state.load_favourites()
+        if rel not in saved:
+            state.save_favourites([*saved, rel])
+        return await asyncio.to_thread(favourites_json)
+
+    @app.delete("/api/favourites")
+    async def remove_favourite(path: str = Query("")) -> dict:
+        rel = path.strip("/")
+        state.save_favourites([p for p in state.load_favourites() if p != rel])
+        return await asyncio.to_thread(favourites_json)
+
     # -- Browsing ------------------------------------------------------------
 
     @app.get("/api/browse")
@@ -380,6 +476,7 @@ def create_app(
 
         def listing() -> dict:
             dirs = []
+            found_archives = []
             audio_here = 0
             try:
                 entries = sorted(os.scandir(directory), key=lambda e: e.name.lower())
@@ -399,7 +496,20 @@ def create_app(
                     )
                 elif entry.is_file() and Path(entry.name).suffix.lower() in tags.AUDIO_EXTENSIONS:
                     audio_here += 1
-            return {"dirs": dirs, "audio_files": audio_here}
+                elif entry.is_file() and archives.is_archive(entry.name):
+                    try:
+                        size = entry.stat().st_size
+                    except OSError:
+                        size = 0
+                    found_archives.append(
+                        {"name": entry.name, "path": _relative(root, Path(entry.path).resolve()), "bytes": size}
+                    )
+            return {
+                "dirs": dirs,
+                "audio_files": audio_here,
+                "archives": found_archives,
+                "writable": os.access(directory, os.W_OK | os.X_OK),
+            }
 
         data = await asyncio.to_thread(listing)
         rel = _relative(root, directory)
@@ -409,6 +519,32 @@ def create_app(
             walked = f"{walked}/{part}".strip("/")
             crumbs.append({"name": part, "path": walked})
         return {"path": rel, "crumbs": crumbs, **data}
+
+    extract_lock = asyncio.Lock()
+
+    @app.post("/api/extract")
+    async def extract(body: PathIn) -> dict:
+        """Extract an archive next to itself. The only endpoint that writes to the library."""
+        refuse_during_batch()
+        file = _resolve(root, body.path)
+        if not file.is_file():
+            raise HTTPException(404, "That archive no longer exists.")
+        if not archives.is_archive(file.name):
+            raise HTTPException(422, "That isn't a supported archive type.")
+        if extract_lock.locked():
+            raise HTTPException(409, "Another archive is already being extracted. Try again in a moment.")
+        async with extract_lock:
+            try:
+                result = await asyncio.to_thread(archives.extract_archive, file)
+            except archives.ExtractError as error:
+                raise HTTPException(422, str(error))
+            except PermissionError:
+                raise HTTPException(403, "Permission denied writing to that folder.")
+        return {
+            "path": _relative(root, result.directory.resolve()),
+            "name": result.directory.name,
+            "files": result.files,
+        }
 
     @app.post("/api/scan")
     async def scan(body: PathIn) -> dict:
@@ -523,6 +659,63 @@ def create_app(
         covers[body.path.strip("/")] = (data, kind[0], file.name)
         return cover_json(covers[body.path.strip("/")], body.path)
 
+    # -- Online artwork (Cover Art Archive, fanart.tv) -------------------------
+
+    @app.get("/api/artwork")
+    async def find_artwork(release: str = Query(""), release_group: str = Query("")) -> dict:
+        mbid = re.compile(r"^[0-9a-fA-F-]{36}$")
+        if (release and not mbid.match(release)) or (release_group and not mbid.match(release_group)):
+            raise HTTPException(422, "Not a valid MusicBrainz ID.")
+        if release and not release_group:
+            try:  # fanart.tv is keyed by release group, so find this release's
+                release_group = (await client.lookup_release(release)).get("release-group", {}).get("id", "")
+            except Exception:  # noqa: BLE001 - still worth searching the Cover Art Archive
+                release_group = ""
+        return await artwork.find_artwork(
+            settings.user_agent,
+            release=release or None,
+            release_group=release_group or None,
+            fanart_key=integrations.get("fanart_api_key"),
+        )
+
+    @app.post("/api/cover/online")
+    async def use_online_cover(body: OnlineCoverIn) -> dict:
+        directory = _resolve(root, body.path)
+        if not directory.is_dir():
+            raise HTTPException(404, "Not a directory.")
+        try:
+            data = await artwork.download(settings.user_agent, body.url)
+        except artwork.ArtworkError as error:
+            raise HTTPException(502, str(error)) from error
+        kind = _sniff_image(data)
+        if kind is None:
+            raise HTTPException(415, "That wasn't a JPEG, PNG, GIF or WebP image.")
+        covers[body.path.strip("/")] = (data, kind[0], f"cover{kind[1]}")
+        return cover_json(covers[body.path.strip("/")], body.path)
+
+    # -- Integration settings --------------------------------------------------
+
+    @app.get("/api/settings")
+    async def get_settings() -> dict:
+        return integrations.public_view()
+
+    @app.put("/api/settings")
+    async def put_settings(body: SettingsIn) -> dict:
+        integrations.update(body.model_dump())
+        return integrations.public_view()
+
+    @app.post("/api/settings/test-fanart")
+    async def test_fanart() -> dict:
+        key = integrations.get("fanart_api_key")
+        if not key:
+            raise HTTPException(422, "No fanart.tv API key saved yet.")
+        # Nirvana - Nevermind: a release group fanart.tv certainly has art for.
+        async with artwork._client(settings.user_agent) as http:
+            found, note = await artwork._fanart(http, "1b022e01-4da6-387b-8658-8678046e4cef", key)
+        if note:
+            raise HTTPException(502, note)
+        return {"ok": True, "images": len(found)}
+
     # -- MusicBrainz matching ------------------------------------------------
 
     @app.post("/api/match")
@@ -535,11 +728,17 @@ def create_app(
         )
         if not album.title or not album.artist:
             raise HTTPException(422, "Title and artist are required to search MusicBrainz.")
+        names = [n.strip() for n in body.artists if n.strip()]
+        split = len(names) > 1
         try:
-            results = await match_album(client, album)
+            results = await match_album(client, album, skip_artist=split)
+            artist_results = await match_artists(client, names) if split else []
         except Exception as error:
             raise mb_error(error)
-        return {entity.value: _match_to_json(result) for entity, result in results.items()}
+        out = {entity.value: _match_to_json(result) for entity, result in results.items()}
+        for index, result in enumerate(artist_results):  # artist, artist-2, artist-3, ...
+            out["artist" if index == 0 else f"artist-{index + 1}"] = _match_to_json(result)
+        return out
 
     @app.post("/api/lookup")
     async def lookup(body: LookupIn) -> dict:
@@ -594,6 +793,8 @@ def create_app(
             primary_type=_blank_to_none(body.primary_type),
             secondary_types=body.secondary_types,
             edit_note=_blank_to_none(body.edit_note),
+            artists=body.artists,
+            join_phrase=body.join_phrase,
         )
         return {"url": url}
 
@@ -605,6 +806,8 @@ def create_app(
             release_group_mbid=_extract_mbid(body.release_group_mbid),
             artist_mbid=_extract_mbid(body.artist_mbid),
             label_mbid=_extract_mbid(body.label_mbid),
+            artists=[(a.name.strip(), _extract_mbid(a.mbid)) for a in body.artists if a.name.strip()],
+            join_phrase=body.join_phrase,
             status=_blank_to_none(details.status),
             language=_blank_to_none(details.language),
             script=_blank_to_none(details.script),
@@ -735,6 +938,7 @@ def create_app(
             cover_filename=body.cover_filename,
             awaiting=[e for e in body.awaiting if e in CAPTURE_ENTITIES],
             names=body.names,
+            artist_names=body.artist_names,
         )
         return {"ok": True}
 
@@ -757,6 +961,144 @@ def create_app(
         taken = list(captures)
         captures.clear()
         return {"captures": taken}
+
+    # -- Picard --------------------------------------------------------------
+    # FilesToMB writes the release's MBIDs into the files, tells Picard to load
+    # the folder (which then lands on that release by itself), and later tells
+    # it to save. Picard stays the single source of truth for naming/tagging.
+
+    def plan_json(plan: releasetags.Plan) -> dict:
+        release = plan.release
+
+        def track_json(t: releasetags.ReleaseTrack) -> dict:
+            return {"disc": t.disc, "position": t.position, "title": t.title, "length_ms": t.length_ms}
+
+        return {
+            "release": {
+                "mbid": release.mbid,
+                "title": release.title,
+                "artist": release.artist,
+                "date": release.date,
+                "track_count": len(release.tracks),
+            },
+            "pairs": [
+                {
+                    "filename": p.track.path.name,
+                    "title": p.track.title,
+                    "track_number": p.track.track_number or "",
+                    "disc_number": p.track.disc_number or "",
+                    "match": track_json(p.release_track) if p.release_track else None,
+                    "score": round(p.score),
+                }
+                for p in plan.pairs
+            ],
+            "unmatched_release_tracks": [track_json(t) for t in plan.unmatched_release_tracks],
+            "complete": plan.complete,
+        }
+
+    async def build_plan(path: str, release_mbid: str) -> tuple[releasetags.Plan, Path]:
+        directory = _resolve(root, path)
+        mbid = _extract_mbid(release_mbid)
+        if not mbid:
+            raise HTTPException(422, "That doesn't look like a MusicBrainz release ID.")
+        if not directory.is_dir():
+            raise HTTPException(404, "Not a directory.")
+        album = await asyncio.to_thread(tags.scan_directory, directory, False)
+        if album is None:
+            raise HTTPException(404, "No readable audio files were found in that folder.")
+        try:
+            release = releasetags.parse_release(await client.lookup_release(mbid))
+        except Exception as error:
+            raise mb_error(error)
+        return releasetags.match_tracks(album.tracks, release), directory
+
+    @app.get("/api/picard/status")
+    async def picard_status() -> dict:
+        configured = bool(settings.picard_pipe_dir)
+        connected = await asyncio.to_thread(picard.is_connected, settings.picard_pipe_dir) if configured else False
+        return {"configured": configured, "connected": connected, "url": settings.picard_url}
+
+    @app.post("/api/picard/plan")
+    async def picard_plan(body: PicardReleaseIn) -> dict:
+        """Preview how this folder's files pair up with the release. Writes nothing."""
+        plan, _ = await build_plan(body.path, body.release_mbid)
+        return plan_json(plan)
+
+    @app.post("/api/picard/send")
+    async def picard_send(body: PicardReleaseIn) -> dict:
+        """Tag the files with the release's IDs, then have Picard load the folder."""
+        refuse_during_batch()
+        if not body.tag_only and not await asyncio.to_thread(picard.is_connected, settings.picard_pipe_dir):
+            raise HTTPException(503, "Picard isn't reachable, so nothing was changed.")
+        plan, directory = await build_plan(body.path, body.release_mbid)
+        try:
+            written = await asyncio.to_thread(releasetags.write_tags, plan)
+        except releasetags.TagWriteError as error:
+            raise HTTPException(500, str(error))
+        loaded = False
+        if not body.tag_only:
+            try:
+                await asyncio.to_thread(
+                    picard.send,
+                    settings.picard_pipe_dir,
+                    ("LOAD", picard.to_picard_path(directory, root, settings.picard_library_root)),
+                )
+                loaded = True
+            except picard.PicardUnavailable as error:
+                raise HTTPException(503, f"Files were tagged, but Picard couldn't be told to load them: {error}")
+        if loaded:
+            row = batch_db.get(body.path.strip("/"))
+            if row and row["status"] not in (batch_store_module.DONE, batch_store_module.PROCESSING):
+                batch_db.update(row["path"], status=batch_store_module.IN_PICARD, release_mbid=plan.release.mbid,
+                                message="Tagged and loaded in Picard by hand.")
+        return {
+            "tagged": written,
+            "matched": sum(1 for p in plan.pairs if p.release_track),
+            "unmatched_local": [p.track.path.name for p in plan.pairs if not p.release_track],
+            "loaded": loaded,
+        }
+
+    async def picard_command(*commands: tuple[str, str]) -> dict:
+        try:
+            await asyncio.to_thread(picard.send, settings.picard_pipe_dir, *commands)
+        except picard.PicardUnavailable as error:
+            raise HTTPException(503, str(error))
+        return {"ok": True}
+
+    @app.post("/api/picard/save")
+    async def picard_save() -> dict:
+        """Picard's "Save" for every matched file: rewrites tags, renames and moves per your Picard settings."""
+        refuse_during_batch()
+        return await picard_command(("SAVE_MATCHED", ""))
+
+    @app.post("/api/picard/clear")
+    async def picard_clear() -> dict:
+        """Remove already-saved files from Picard's album pane."""
+        refuse_during_batch()
+        return await picard_command(("REMOVE_SAVED", ""))
+
+    app.state.batch = app_state_batch
+    batch_api.register(app, batch, lambda rel: _resolve(root, rel))
+    send_to_lidarr = lidarr_api.register(app, settings, root, lambda rel: _resolve(root, rel), client)
+
+    notify_enforcer = enforcer_api.register(app, settings, root, lambda rel: _resolve(root, rel))
+
+    async def after_saved(folder: Path, release_mbid: str) -> str | None:
+        notes = []
+        if integrations.get("lidarr_auto") == "1" and lidarr_api.configured():
+            outcome = await send_to_lidarr(folder, release_mbid)
+            if not outcome.ok:
+                raise RuntimeError(outcome.summary)
+            notes.append(outcome.summary)
+        if integrations.get("enforcer_auto") == "1" and enforcer_api.configured():
+            try:  # the enforcer being down never stops the batch: it rescans on its own schedule anyway
+                await notify_enforcer()
+                notes.append("Told Genre Enforcer.")
+            except Exception as error:  # noqa: BLE001
+                notes.append(f"Couldn't tell Genre Enforcer ({getattr(error, 'detail', error)}).")
+        return " ".join(notes) or None
+
+    batch.after_saved = after_saved
 
     # -- Static frontend -----------------------------------------------------
 

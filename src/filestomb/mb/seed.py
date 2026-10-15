@@ -103,11 +103,17 @@ def seed_release_group_url(
     primary_type: str | None = None,
     secondary_types: list[str] | None = None,
     edit_note: str | None = None,
+    artists: list[str] | None = None,
+    join_phrase: str = "",
 ) -> str:
-    params: dict[str, str] = {
-        "edit-release-group.name": title,
-        "edit-release-group.artist_credit.names.0.artist.name": artist_name,
-    }
+    # Several artists become one artist credit: names.N.artist.name, joined by
+    # names.N.join_phrase (e.g. " & ") on every name but the last.
+    credit = [a for a in (artists or []) if a.strip()] or [artist_name]
+    params: dict[str, str] = {"edit-release-group.name": title}
+    for index, name in enumerate(credit):
+        params[f"edit-release-group.artist_credit.names.{index}.artist.name"] = name
+        if join_phrase and index < len(credit) - 1:
+            params[f"edit-release-group.artist_credit.names.{index}.join_phrase"] = join_phrase
     if disambiguation:
         params["edit-release-group.comment"] = disambiguation
     if primary_type:
@@ -140,13 +146,21 @@ def _release_form_fields(
     disambiguation: str | None = None,
     external_links: list[str] | None = None,
     edit_note: str | None = None,
+    artists: list[tuple[str, str | None]] | None = None,
+    join_phrase: str = "",
 ) -> dict[str, str]:
     fields: dict[str, str] = {"name": album.title}
 
-    if artist_mbid:
-        fields["artist_credit.names.0.mbid"] = artist_mbid
-    else:
-        fields["artist_credit.names.0.name"] = album.artist
+    # One artist credit; several artists are joined by `join_phrase` (e.g. " & ")
+    # on every name but the last. Known artists go in by MBID, new ones by name.
+    credit = artists if artists else [(album.artist, artist_mbid)]
+    for index, (name, mbid) in enumerate(credit):
+        if mbid:
+            fields[f"artist_credit.names.{index}.mbid"] = mbid
+        else:
+            fields[f"artist_credit.names.{index}.name"] = name
+        if join_phrase and index < len(credit) - 1:
+            fields[f"artist_credit.names.{index}.join_phrase"] = join_phrase
 
     if release_group_mbid:
         fields["release_group"] = release_group_mbid

@@ -28,3 +28,22 @@ def load_last_directory() -> Path | None:
 
 def save_last_directory(directory: Path) -> None:
     _state_path().write_text(json.dumps({"last_directory": str(directory)}))
+
+
+def _favourites_path() -> Path:
+    return config_dir() / "favourites.json"
+
+
+def load_favourites() -> list[str]:
+    """Favourite folders, as library-relative paths, in the order they were added."""
+    try:
+        data = json.loads(_favourites_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, str) and item]
+
+
+def save_favourites(paths: list[str]) -> None:
+    _favourites_path().write_text(json.dumps(paths, indent=2))

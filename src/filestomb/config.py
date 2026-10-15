@@ -21,6 +21,11 @@ class Settings:
     oauth_client_secret: str = ""
     # Root of the music library the web UI is allowed to browse.
     music_root: Path = Path.home()
+    # Picard integration (web UI). Both are optional; see compose.yaml.
+    picard_pipe_dir: str = ""  # directory holding Picard's remote-command pipe
+    picard_url: str = ""  # where you reach Picard's own UI, for the "Open Picard" link
+    picard_library_root: str = "/music"  # the library's path as Picard sees it
+    picard_dest_root: str = ""  # where Picard saves files (our path); lets batch mode verify they landed
 
     @property
     def user_agent(self) -> str:
@@ -47,4 +52,8 @@ def load_settings() -> Settings:
         oauth_client_id=os.environ.get("MB_OAUTH_CLIENT_ID", ""),
         oauth_client_secret=os.environ.get("MB_OAUTH_CLIENT_SECRET", ""),
         music_root=Path(os.environ.get("MUSIC_ROOT") or Path.home()).expanduser(),
+        picard_pipe_dir=os.environ.get("PICARD_PIPE_DIR", ""),
+        picard_url=os.environ.get("PICARD_URL", "").rstrip("/"),
+        picard_library_root=os.environ.get("PICARD_LIBRARY_ROOT", "/music"),
+        picard_dest_root=os.environ.get("PICARD_DEST_ROOT", ""),
     )

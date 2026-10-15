@@ -10,6 +10,12 @@ services:
       - "8097:8000"
     env_file: .env
     volumes:
-      # Read-only: FilesToMB only ever reads tags and cover art.
-      - /mnt/Main20TB:/music:ro
+      # Read-write, only so "Extract here" can unpack archives next to themselves.
+      # Everything else FilesToMB does is read-only. Append :ro to forbid
+      # extraction; the UI then disables the Extract buttons by itself.
+      - /mnt/Main20TB:/music
       - ./config:/config
+      # Optional Picard integration: Picard's runtime folder (it holds the remote-command
+      # pipe), shared with the picard container. See README. Remove this line and
+      # PICARD_PIPE_DIR in .env if you don't use Picard.
+      - /opt/picard/run:/picard-run
