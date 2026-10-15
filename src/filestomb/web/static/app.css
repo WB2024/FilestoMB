@@ -126,7 +126,7 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 120px; outline: non
 
 label.field { display: block; margin-bottom: 14px; }
 label.field > span { display: block; margin-bottom: 5px; color: var(--muted); font-size: .76rem; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
-input[type=text], input:not([type]), select, textarea {
+input[type=text], input[type=password], input:not([type]), select, textarea {
   width: 100%; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--line);
   background: var(--bg-2); color: var(--text); font: 400 .95rem var(--body);
   transition: border-color .15s, box-shadow .15s;
@@ -381,3 +381,11 @@ dialog[open] { animation: pop .2s ease both; }
 .gchip.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 16%, var(--panel-2)); }
 .gchip small { color: var(--muted); }
 .chip b { background: var(--gold); color: #1a1410; border-radius: 999px; padding: 0 7px; font-size: .72rem; }
+.srows { display: grid; gap: 8px; margin-top: 10px; }
+.srow { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.srow:hover { border-color: var(--gold-deep); }
+.sinfo { min-width: 0; }
+.sinfo b { font-weight: 600; }
+.sby { margin-left: 8px; color: var(--muted); font-size: .85rem; }
+.smeta { margin-top: 2px; color: var(--muted); font-size: .78rem; }
+.srow .btn { flex: none; }

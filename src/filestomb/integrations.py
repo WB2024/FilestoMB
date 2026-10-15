@@ -23,7 +23,7 @@ ENV_NAMES = {
     "lidarr_library_path": "LIDARR_LIBRARY_PATH",
     # "1" = batch mode sends each finished album to Lidarr automatically
     "lidarr_auto": "LIDARR_AUTO",
-    # Music Genre Enforcer's address, e.g. http://192.168.1.110:8320
+    # Music Genre Enforcer's address, e.g. http://enforcer.local:8320
     "enforcer_url": "ENFORCER_URL",
     # "1" = batch mode tells the enforcer about each finished album
     "enforcer_auto": "ENFORCER_AUTO",

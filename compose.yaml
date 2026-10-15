@@ -4,18 +4,16 @@ services:
     image: wb20244/filestomb:latest
     container_name: filestomb
     restart: unless-stopped
-    user: "1000:1000"            # matches the owner of the music library and ./config
-    network_mode: bridge         # default bridge; avoids allocating a new compose network
+    user: "1000:1000"            # the owner of your music library and ./config
     ports:
       - "8097:8000"
     env_file: .env
     volumes:
-      # Read-write, only so "Extract here" can unpack archives next to themselves.
-      # Everything else FilesToMB does is read-only. Append :ro to forbid
-      # extraction; the UI then disables the Extract buttons by itself.
-      - /mnt/Main20TB:/music
-      - ./config:/config
-      # Optional Picard integration: Picard's runtime folder (it holds the remote-command
-      # pipe), shared with the picard container. See README. Remove this line and
-      # PICARD_PIPE_DIR in .env if you don't use Picard.
-      - /opt/picard/run:/picard-run
+      # Your music. Read-write only so "Extract here" can unpack archives and
+      # batch mode can tag files; add :ro to forbid that (Extract then disables itself).
+      - /path/to/your/music:/music
+      - ./config:/config         # login token, favourites, batch database, audit log
+      # Optional Picard integration: Picard's runtime folder (it holds the
+      # remote-command pipe), shared with your Picard container. See the README.
+      # Remove this line and PICARD_PIPE_DIR in .env if you don't use Picard.
+      # - /opt/picard/run:/picard-run

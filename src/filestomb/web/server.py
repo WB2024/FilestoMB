@@ -114,6 +114,12 @@ class NameIn(BaseModel):
     name: str
 
 
+class SearchIn(BaseModel):
+    entity: str  # artist | label | release-group | release
+    name: str
+    artist: str = ""
+
+
 class ReleaseGroupSeedIn(BaseModel):
     title: str
     artist: str
@@ -326,6 +332,32 @@ def _match_to_json(result) -> dict:
         "query": result.query,
         "selected_mbid": result.selected_mbid,
         "candidates": [asdict(c) for c in result.candidates],
+    }
+
+
+def _credit(item: dict) -> str:
+    return "".join(f"{c.get('name', '')}{c.get('joinphrase', '')}" for c in item.get("artist-credit") or [])
+
+
+def _search_result(entity: str, item: dict) -> dict:
+    """One search hit, reduced to what the picker shows."""
+    if entity == "release":
+        detail = [item.get("date"), item.get("country"), f"{item['track-count']} tracks" if item.get("track-count") else None, item.get("status")]
+        name, artist = item.get("title", ""), _credit(item)
+    elif entity == "release-group":
+        detail = [item.get("primary-type"), item.get("first-release-date")]
+        name, artist = item.get("title", ""), _credit(item)
+    else:
+        area = (item.get("area") or {}).get("name")
+        detail = [item.get("type"), area or item.get("country")]
+        name, artist = item.get("name", ""), ""
+    return {
+        "mbid": item["id"],
+        "name": name,
+        "artist": artist,
+        "disambiguation": item.get("disambiguation") or None,
+        "detail": " · ".join(str(d) for d in detail if d),
+        "score": float(item.get("score", 0)),
     }
 
 
@@ -739,6 +771,19 @@ def create_app(
         for index, result in enumerate(artist_results):  # artist, artist-2, artist-3, ...
             out["artist" if index == 0 else f"artist-{index + 1}"] = _match_to_json(result)
         return out
+
+    @app.post("/api/search")
+    async def search(body: SearchIn) -> dict:
+        """The manual "Search MusicBrainz" box: free-text search for one entity."""
+        if body.entity not in ("artist", "label", "release-group", "release"):
+            raise HTTPException(422, "Unknown entity.")
+        if not body.name.strip():
+            raise HTTPException(422, "Type something to search for.")
+        try:
+            raw = await client.search_free(body.entity, body.name, body.artist)
+        except Exception as error:
+            raise mb_error(error)
+        return {"results": [_search_result(body.entity, item) for item in raw]}
 
     @app.post("/api/lookup")
     async def lookup(body: LookupIn) -> dict:

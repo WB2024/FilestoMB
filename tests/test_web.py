@@ -340,3 +340,32 @@ async def test_release_seed_endpoint_passes_the_split_credit(client):
     body = {"album": {"title": "T", "artist": "A & B", "tracks": []}, "artists": [{"name": "A", "mbid": None}, {"name": "B", "mbid": None}], "join_phrase": " & "}
     fields = (await client.post("/api/seed/release", json=body)).json()["fields"]
     assert fields["artist_credit.names.0.join_phrase"] == " & " and fields["artist_credit.names.1.name"] == "B"
+
+
+@respx.mock
+async def test_manual_search_falls_back_from_exact_phrase_to_any_order(client):
+    queries = []
+
+    def release_group_search(request):
+        queries.append(request.url.params["query"])
+        if len(queries) == 1:
+            return httpx.Response(200, json={"release-groups": []})
+        return httpx.Response(200, json={"release-groups": [{
+            "id": "rg-1", "title": "Killamangiro", "score": 88, "primary-type": "EP", "first-release-date": "2004",
+            "artist-credit": [{"name": "Babyshambles", "joinphrase": ""}],
+        }]})
+
+    respx.get("https://musicbrainz.org/ws/2/release-group").mock(side_effect=release_group_search)
+    r = (await client.post("/api/search", json={"entity": "release-group", "name": "Killamangiro EP", "artist": "Babyshambles"})).json()
+    assert queries[0].startswith('releasegroup:"Killamangiro EP"') and 'artist:"Babyshambles"' in queries[0]
+    assert "AND" in queries[1] and '"Killamangiro EP"' not in queries[1]  # second try: the words in any order
+    hit = r["results"][0]
+    assert hit["mbid"] == "rg-1" and hit["artist"] == "Babyshambles" and hit["detail"] == "EP · 2004"
+
+
+@respx.mock
+async def test_manual_search_with_no_results_and_bad_input(client):
+    respx.get("https://musicbrainz.org/ws/2/artist").respond(json={"artists": []})
+    assert (await client.post("/api/search", json={"entity": "artist", "name": "Zzzz Nobody"})).json() == {"results": []}
+    assert (await client.post("/api/search", json={"entity": "artist", "name": "  "})).status_code == 422
+    assert (await client.post("/api/search", json={"entity": "recording", "name": "x"})).status_code == 422

@@ -522,7 +522,7 @@ async function openSettings() {
       <p class="note">Used by “Find online…” on the cover card, alongside the Cover Art Archive.</p>
       <div class="inline-actions" style="margin-bottom:18px">${f.set ? '<button class="btn small" id="set-test">Test key</button><button class="btn small ghost" id="set-clear">Remove key</button>' : ''}</div>
       <h4 style="margin:0 0 8px">Lidarr</h4>
-      <label class="field"><span>URL</span><input id="set-lurl" value="${val('lidarr_url')}" placeholder="http://192.168.1.110:8686"></label>
+      <label class="field"><span>URL</span><input id="set-lurl" value="${val('lidarr_url')}" placeholder="http://lidarr.local:8686"></label>
       <label class="field"><span>API key ${tag(lk)}</span><input type="password" id="set-lkey" autocomplete="off" placeholder="${lk.set ? 'Leave blank to keep the saved key' : 'Lidarr → Settings → General → API Key'}"></label>
       <label class="field"><span>Root folder, as Lidarr sees it</span><input id="set-lroot" value="${val('lidarr_root_folder')}" placeholder="/data/Media/Audio/Music/Sources/Clean"></label>
       <label class="field"><span>Library mount inside Lidarr</span><input id="set-llib" value="${val('lidarr_library_path') || '/data'}" placeholder="/data"></label>
@@ -530,7 +530,7 @@ async function openSettings() {
       <p class="note">Albums are added by their exact MusicBrainz release and Lidarr rescans the folder where Picard saved them. Files are never moved or renamed by Lidarr.</p>
       <div class="inline-actions" style="margin-bottom:18px">${lk.set ? '<button class="btn small" id="set-ltest">Test Lidarr</button>' : ''}</div>
       <h4 style="margin:0 0 8px">Music Genre Enforcer</h4>
-      <label class="field"><span>URL</span><input id="set-eurl" value="${val('enforcer_url')}" placeholder="http://192.168.1.110:8320"></label>
+      <label class="field"><span>URL</span><input id="set-eurl" value="${val('enforcer_url')}" placeholder="http://enforcer.local:8320"></label>
       <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-eauto" ${st.enforcer_auto?.value === '1' ? 'checked' : ''}> Batch mode tells it about each finished album</label>
       <p class="note">New artists are reviewed inside FilesToMB (the Genres chip). The enforcer itself keeps the genres and writes the tags.</p>
       <div class="inline-actions">${st.enforcer_url?.set ? '<button class="btn small" id="set-etest">Test connection</button>' : ''}</div>
@@ -593,6 +593,7 @@ function refreshMatchUI() {
     if (mbid === '__new__') { m.selected = null; m.createNew = true; } else { m.selected = mbid; m.createNew = false; }
     refreshMatchUI();
   }));
+  $$('[data-search]', host).forEach((b) => b.addEventListener('click', () => openSearch(b.dataset.search)));
   $$('[data-manual]', host).forEach((form) => form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const key = form.dataset.manual;
@@ -604,6 +605,46 @@ function refreshMatchUI() {
       refreshMatchUI();
     } catch (err) { toast(err.message, 'error'); }
   }));
+}
+
+// "Search…": look an entity up on MusicBrainz by hand (when the automatic match missed it),
+// then pick a result, or fall back to creating it.
+function openSearch(key) {
+  const a = state.album; const info = entityInfo(key);
+  const type = isArtistKey(key) ? 'artist' : key;
+  const hasArtistField = type === 'release-group' || type === 'release';
+  const first = type === 'artist' ? artistNames()[artistIndex(key)] : type === 'label' ? a.label : a.title;
+  openDialog(`<form id="srch-form"><div class="dlg-head"><h3>Search MusicBrainz: ${esc(info.name.toLowerCase())}</h3><p>Type what you know. Results come straight from MusicBrainz.</p></div>
+    <div class="dlg-body">
+      <label class="field"><span>${type === 'artist' || type === 'label' ? 'Name' : 'Title'}</span><input type="text" id="srch-name" value="${esc(first || '')}" autocomplete="off"></label>
+      ${hasArtistField ? `<label class="field"><span>Artist <small style="text-transform:none;letter-spacing:0">(optional)</small></span><input type="text" id="srch-artist" value="${esc(a.artist || '')}" autocomplete="off"></label>` : ''}
+      <div id="srch-results"></div>
+    </div>
+    <div class="dlg-foot"><button class="btn" type="button" id="dlg-cancel">Close</button><button class="btn primary" type="submit">${ICON.search} Search</button></div></form>`);
+  $('#dlg-cancel').addEventListener('click', closeDialog);
+  $('#srch-name').focus(); $('#srch-name').select();
+  const out = $('#srch-results');
+  $('#srch-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('button[type=submit]', e.target); busy(btn, true, 'Searching…');
+    out.innerHTML = '';
+    try {
+      const { results } = await api('POST', '/api/search', { entity: type, name: $('#srch-name').value, artist: hasArtistField ? $('#srch-artist').value : '' });
+      if (!results.length) {
+        out.innerHTML = `<div class="card pad" style="margin-top:8px"><b>No results.</b><p class="note" style="margin:6px 0 10px">Nothing like that is on MusicBrainz. Try fewer words, or create it.</p><button class="btn" type="button" id="srch-new">Create a new ${esc(info.name.toLowerCase())}</button></div>`;
+        $('#srch-new').addEventListener('click', () => { const m = state.matches[key]; m.selected = null; m.createNew = true; closeDialog(); refreshMatchUI(); if (state.view === 'submit') renderSubmit(); });
+      } else {
+        out.innerHTML = `<div class="srows">${results.map((r, i) => `<div class="srow"><div class="sinfo"><b>${esc(r.name)}</b>${r.artist ? `<span class="sby">${esc(r.artist)}</span>` : ''}<div class="smeta">${[r.detail, r.disambiguation].filter(Boolean).map(esc).join(' · ')}${r.detail || r.disambiguation ? ' · ' : ''}<a href="${info.view(r.mbid)}" target="_blank" rel="noopener">view ↗</a></div></div><button class="btn small primary" type="button" data-use="${i}">Use this</button></div>`).join('')}</div>`;
+        $$('[data-use]', out).forEach((b) => b.addEventListener('click', () => {
+          const r = results[+b.dataset.use];
+          adopt(key, { mbid: r.mbid, name: r.name, score: r.score, disambiguation: [r.artist, r.detail].filter(Boolean).join(' · ') || null });
+          closeDialog(); refreshMatchUI(); if (state.view === 'submit') renderSubmit();
+          toast(`${info.name} set to “${r.name}”.`, 'ok');
+        }));
+      }
+    } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
 }
 
 function entityCard(key) {
@@ -621,7 +662,7 @@ function entityCard(key) {
     <div class="cands">
       ${m.candidates.map((c) => row(c.mbid, `<b>${esc(c.name)}</b>${c.disambiguation ? `<small>${esc(c.disambiguation)}</small>` : ''}${c.extra ? `<small>${esc(c.extra)}</small>` : ''}<a href="${info.view(c.mbid)}" target="_blank" rel="noopener">view ↗</a>`, c.score)).join('')}
       ${row('__new__', `<b>None of these</b><small>create a new ${info.name.toLowerCase()}</small>`, null)}
-      <form class="manual" data-manual="${key}"><input type="text" placeholder="…or paste a MusicBrainz ID / URL" aria-label="MusicBrainz ID for ${info.name}"><button class="btn small" type="submit">Use</button></form>
+      <form class="manual" data-manual="${key}"><input type="text" placeholder="…or paste a MusicBrainz ID / URL" aria-label="MusicBrainz ID for ${info.name}"><button class="btn small" type="submit">Use</button><button class="btn small" type="button" data-search="${key}" title="Search MusicBrainz yourself">${ICON.search} Search…</button></form>
     </div>
   </div>`;
 }

@@ -141,6 +141,25 @@ class MusicBrainzClient:
             for item in data.get("releases", [])
         ]
 
+    async def search_free(self, entity: str, name: str, artist: str = "", limit: int = 10) -> list[dict]:
+        """Free-text search for the manual "Search MusicBrainz" box: an exact phrase first,
+        then, if that finds nothing, the same words in any order. Results as MusicBrainz
+        returns them (so the UI can show type, date, country, track count...)."""
+        field = {"artist": "artist", "label": "label", "release-group": "releasegroup", "release": "release"}[entity]
+        words = [w for w in name.split() if w]
+        if not words:
+            return []
+        attempts = [f'{field}:"{_escape(name.strip())}"', f"{field}:(" + " AND ".join(_escape(w) for w in words) + ")"]
+        key = {"artist": "artists", "label": "labels", "release-group": "release-groups", "release": "releases"}[entity]
+        for attempt in attempts:
+            query = attempt
+            if entity in ("release-group", "release") and artist.strip():
+                query += f' AND artist:"{_escape(artist.strip())}"'
+            found = (await self._get(f"/{entity}", {"query": query, "limit": limit})).get(key, [])
+            if found:
+                return found
+        return []
+
     async def search_releases_raw(self, title: str, artist: str, limit: int = 10) -> list[dict]:
         """Release search results as MusicBrainz returns them (with track-count, date, country...)."""
         query = f'release:"{_escape(title)}" AND artist:"{_escape(artist)}"'
