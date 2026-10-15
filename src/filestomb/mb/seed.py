@@ -215,6 +215,21 @@ def _release_form_fields(
     return fields
 
 
+def build_release_seed_fields(album: Album, **kwargs) -> dict[str, str]:
+    """The flat form fields for MusicBrainz's "Add Release" editor, for
+    callers (the web UI) that POST them to ``{BASE_URL}/release/add`` from
+    the user's own browser instead of writing a local HTML file.
+    Accepts the same keyword arguments as `build_release_seed_form`.
+    """
+    return _release_form_fields(
+        album,
+        kwargs.pop("release_group_mbid", None),
+        kwargs.pop("artist_mbid", None),
+        kwargs.pop("label_mbid", None),
+        **kwargs,
+    )
+
+
 def build_release_seed_form(
     album: Album,
     release_group_mbid: str | None = None,

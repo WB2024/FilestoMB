@@ -124,7 +124,7 @@ class SubmitScreen(Screen):
             )
             return
 
-        webbrowser.open(f"https://musicbrainz.org/release/{release_mbid}/cover-art-upload")
+        webbrowser.open(f"https://musicbrainz.org/release/{release_mbid}/add-cover-art")
 
         if self.album.cover_art_path:
             self.notify(

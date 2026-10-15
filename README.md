@@ -82,6 +82,21 @@ cp .env.example .env
 python3 main.py   # or: filestomb, once the venv is activated
 ```
 
+## Web UI (Docker)
+
+The same engine is available as a self-hosted web app: browse your library, review matches, edit tracks, and open seeded MusicBrainz forms from any browser on your network.
+
+```bash
+cp .env.example .env     # set MB_CONTACT, PUBLIC_URL, optionally the OAuth client
+docker compose up -d     # serves on :8097
+```
+
+`compose.yaml` mounts the music library **read-only** at `/music` and keeps the OAuth token and last-browsed folder in `./config`. Image: `wb20244/filestomb`.
+
+**Optional userscript.** The header's *Userscript* button installs a Tampermonkey/Violentmonkey script served by your own instance. On MusicBrainz's add-cover-art page it attaches the album's cover and ticks "Front"; on any artist/label/release-group/release page, *Use in FilesToMB* sends the ID back to the app so you don't have to re-check. Form fields themselves are still pre-filled by MusicBrainz's own seeding, and the script never submits an edit.
+
+Run it without Docker with `pip install -e ".[web]"` then `MUSIC_ROOT=/path/to/music filestomb-web`.
+
 ## Configuration
 
 Searching MusicBrainz needs no authentication — just a descriptive, contactable `User-Agent`, which MusicBrainz requires on every request:
@@ -138,7 +153,8 @@ Tests generate real (silent) audio fixtures with `ffmpeg` to exercise actual tag
 - [x] OAuth2 login and adding resolved releases to a personal collection
 - [x] Remember recently-used directories, with Up/jump-to-path navigation
 - [x] Cover art detection and upload-page assistance
-- [ ] Per-track editing (track titles/numbers) in the review screen
+- [x] Web UI (Docker) with per-track editing and a companion userscript
+- [ ] Per-track editing in the TUI
 - [ ] Batch mode across multiple albums in one session
 
 ## Contributing

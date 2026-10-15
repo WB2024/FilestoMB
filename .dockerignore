@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+**/__pycache__
+.pytest_cache
+tests
+Screenshots
+.playwright-mcp
+*.png
+!src/filestomb/web/static/logo.png

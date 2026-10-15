@@ -23,6 +23,10 @@ DEFAULT_BASE_URL = "https://musicbrainz.org/ws/2"
 # request per second: https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting
 MIN_REQUEST_INTERVAL = 1.0
 
+# MusicBrainz answers 503 when it rate-limits a client. One patient retry
+# smooths over a transient throttle without hammering the server.
+RETRY_DELAY = 2.5
+
 
 def _escape(value: str) -> str:
     """Escape a value for use inside a Lucene query string."""
@@ -61,6 +65,9 @@ class MusicBrainzClient:
             if elapsed < MIN_REQUEST_INTERVAL:
                 await asyncio.sleep(MIN_REQUEST_INTERVAL - elapsed)
             response = await self._client.request(method, path, params=params, headers=headers)
+            if response.status_code == 503:
+                await asyncio.sleep(RETRY_DELAY)
+                response = await self._client.request(method, path, params=params, headers=headers)
             self._last_request = time.monotonic()
         response.raise_for_status()
         return response
@@ -128,6 +135,37 @@ class MusicBrainzClient:
                 mbid=item["id"],
                 name=item.get("title", ""),
                 score=float(item.get("score", 0)),
+                disambiguation=item.get("disambiguation") or None,
+                extra=item.get("date") or None,
+            )
+            for item in data.get("releases", [])
+        ]
+
+    # -- Browse lookups ---------------------------------------------------
+    # Search results come from a Solr index that can lag a minute or more
+    # behind new edits. Browsing by a parent entity's MBID reads the database
+    # directly, so a just-created release group or release shows up at once.
+
+    async def browse_release_groups(self, artist_mbid: str, limit: int = 100) -> list[Candidate]:
+        data = await self._get("/release-group", {"artist": artist_mbid, "limit": limit})
+        return [
+            Candidate(
+                mbid=item["id"],
+                name=item.get("title", ""),
+                score=100.0,
+                disambiguation=item.get("disambiguation") or None,
+                extra=item.get("primary-type") or None,
+            )
+            for item in data.get("release-groups", [])
+        ]
+
+    async def browse_releases(self, release_group_mbid: str, limit: int = 100) -> list[Candidate]:
+        data = await self._get("/release", {"release-group": release_group_mbid, "limit": limit})
+        return [
+            Candidate(
+                mbid=item["id"],
+                name=item.get("title", ""),
+                score=100.0,
                 disambiguation=item.get("disambiguation") or None,
                 extra=item.get("date") or None,
             )

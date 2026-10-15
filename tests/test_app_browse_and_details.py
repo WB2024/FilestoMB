@@ -231,7 +231,7 @@ async def test_add_cover_art_opens_upload_page_and_reveals_file(tmp_path: Path, 
         submit_screen.action_add_cover_art()
         await pilot.pause()
 
-        assert opened_urls == ["https://musicbrainz.org/release/release-1/cover-art-upload"]
+        assert opened_urls == ["https://musicbrainz.org/release/release-1/add-cover-art"]
         assert revealed_paths == [cover_path]
     await app.mb_client.aclose()
     await app.oauth.aclose()

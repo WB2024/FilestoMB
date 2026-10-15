@@ -66,11 +66,13 @@ def _read_track(path: Path) -> Track | None:
     )
 
 
-def scan_directory(directory: Path) -> Album | None:
+def scan_directory(directory: Path, with_cover: bool = True) -> Album | None:
     """Read every audio file directly under `directory` (recursively, so
     multi-disc folders work) and summarize them as a single Album.
 
-    Returns None if no readable audio files are found.
+    Returns None if no readable audio files are found. `with_cover=False`
+    skips cover discovery (which writes embedded art to a temp file) for
+    callers, like the web UI, that look the cover up separately.
     """
     directory = Path(directory)
     tracks: list[Track] = []
@@ -103,5 +105,5 @@ def scan_directory(directory: Path) -> Album | None:
         catalog_number=catalog_number,
         barcode=barcode,
         tracks=tracks,
-        cover_art_path=coverart.find_or_extract_cover(directory, tracks),
+        cover_art_path=coverart.find_or_extract_cover(directory, tracks) if with_cover else None,
     )

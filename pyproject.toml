@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "filestomb"
-version = "0.1.0"
+version = "0.2.4"
 description = "A keyboard-driven TUI for turning local albums into MusicBrainz edits"
 readme = "README.md"
 license = { text = "MIT" }
@@ -18,7 +18,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
 dev = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
@@ -27,6 +33,7 @@ dev = [
 
 [project.scripts]
 filestomb = "filestomb.app:run"
+filestomb-web = "filestomb.web.server:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/filestomb"]

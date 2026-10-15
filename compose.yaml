@@ -1,0 +1,15 @@
+# FilesToMB web UI. Copy .env.example to .env next to this file and fill it in.
+services:
+  filestomb:
+    image: wb20244/filestomb:latest
+    container_name: filestomb
+    restart: unless-stopped
+    user: "1000:1000"            # matches the owner of the music library and ./config
+    network_mode: bridge         # default bridge; avoids allocating a new compose network
+    ports:
+      - "8097:8000"
+    env_file: .env
+    volumes:
+      # Read-only: FilesToMB only ever reads tags and cover art.
+      - /mnt/Main20TB:/music:ro
+      - ./config:/config
