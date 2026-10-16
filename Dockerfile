@@ -9,9 +9,9 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000
 
 # Archive extraction from the web UI: 7-Zip for zip/7z, libarchive's bsdtar for
-# rar (Debian's 7-Zip can't decompress RAR).
+# rar (Debian's 7-Zip can't decompress RAR). fpcalc (Chromaprint) makes AcoustID fingerprints.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends 7zip libarchive-tools \
+    && apt-get install -y --no-install-recommends 7zip libarchive-tools libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

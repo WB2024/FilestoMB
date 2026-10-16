@@ -123,7 +123,7 @@ Each one is off until you configure it, and the app works fine without any of th
 
 | | What it gives you |
 |---|---|
-| **[MusicBrainz Picard](https://picard.musicbrainz.org)** | One click writes the release IDs into your files and loads them in Picard, which then renames and moves them with *your* settings. FilesToMB never reimplements Picard's naming. |
+| **[MusicBrainz Picard](https://picard.musicbrainz.org)** | One click writes the release IDs into your files and loads them in Picard, which then renames and moves them with *your* settings. FilesToMB never reimplements Picard's naming. Optionally it also generates AcoustID fingerprints first (with `fpcalc`, shown with progress) and writes them to the tags, without any lookup that could re-match files. |
 | **[Lidarr](https://lidarr.audio)** | Adds the album by its exact MusicBrainz release, pins that edition, and has Lidarr rescan the folder Picard saved to. Files are never moved or renamed by Lidarr. |
 | **[Music Genre Enforcer](https://github.com/WB2024/Artist-Genre-Metadata-Enforcer)** | New artists show up in a *Genres* queue inside FilesToMB, with Last.fm suggestions. The enforcer keeps the genres and writes the tags; FilesToMB only calls its API. |
 | **ReplayGain ([rsgain](https://github.com/complexlogic/rsgain))** | Runs the same scan as Picard's *ReplayGain 2.0* plugin on the files Picard saved, shows the numbers, then writes the tags. Options are remembered. |

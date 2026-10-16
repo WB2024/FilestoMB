@@ -1517,7 +1517,7 @@ function renderPicardCard() {
     const step = (n, done, title, detail, action) => `<div class="pstep ${done ? 'done' : ''}"><span class="pnum">${done ? ICON.check : n}</span><div class="pbody"><b>${title}</b><small>${detail}</small></div>${action || ''}</div>`;
     const sent = p.sent;
     body = `<div class="psteps">
-      ${step(1, !!sent, 'Tag files and load in Picard', sent ? `${sent.tagged} file${sent.tagged === 1 ? '' : 's'} tagged · ${sent.matched} matched to the release${sent.loaded ? ' · loaded in Picard' : ''}` : 'Writes this release\'s MusicBrainz IDs into the files so Picard puts them straight onto it.', `<button class="btn ${sent ? '' : 'primary'}" id="picard-send" ${rel && st.connected ? '' : 'disabled'} title="${rel ? (st.connected ? '' : 'Picard isn\'t reachable') : 'Needs a release ID first'}">${sent ? 'Redo' : 'Preview &amp; send'}</button>`)}
+      ${step(1, !!sent, 'Tag files and load in Picard', sent ? `${sent.tagged} file${sent.tagged === 1 ? '' : 's'} tagged · ${sent.matched} matched to the release${sent.loaded ? ' · loaded in Picard' : ''}${sent.fp ? ` · fingerprinted ${sent.fp.ok} of ${sent.fp.total}${sent.fp.errors.length ? ` (${esc(sent.fp.errors.join('; '))})` : ''}` : ''}` : 'Writes this release\'s MusicBrainz IDs into the files so Picard puts them straight onto it.', `<button class="btn ${sent ? '' : 'primary'}" id="picard-send" ${rel && st.connected ? '' : 'disabled'} title="${rel ? (st.connected ? '' : 'Picard isn\'t reachable') : 'Needs a release ID first'}">${sent ? 'Redo' : 'Preview &amp; send'}</button>`)}
       ${step(2, !!sent && p.saved, 'Check it in Picard', 'The files should appear matched under your release. Fix anything odd there.', open)}
       ${step(3, p.saved, 'Save in Picard', p.saved ? 'Save requested. Picard is rewriting tags and moving files with your own settings, so the folder may have moved.' : 'Saves every matched file currently in Picard (not just this album). Tags, renaming and moving follow your own Picard settings.', `<label class="note" style="display:flex;gap:6px;align-items:center" title="Once the files are written, remove them (and their albums) from Picard so the next save only touches the next album"><input type="checkbox" id="picard-clearafter" ${p.clearAfter ? 'checked' : ''}> Clear from Picard after</label><button class="btn ${sent && !p.saved ? 'primary' : ''}" id="picard-save" ${sent && st.connected ? '' : 'disabled'}>${p.saved ? 'Save again' : 'Save in Picard'}</button>${p.saved ? '<button class="btn" id="picard-clear" title="Remove saved files from Picard\'s album pane">Clear saved</button>' : ''}`)}
     </div>`;
@@ -1533,7 +1533,8 @@ async function openPicardPlan() {
   const rel = state.matches.release?.selected;
   openDialog('<div class="dlg-head"><h3>Matching tracks…</h3></div><div class="dlg-body"><div class="scanning" style="padding:30px 0"><span class="spinner"></span></div></div>');
   try {
-    const plan = await api('POST', '/api/picard/plan', { path: state.album.path, release_mbid: rel });
+    const [plan, fpStatus] = await Promise.all([api('POST', '/api/picard/plan', { path: state.album.path, release_mbid: rel }), api('GET', '/api/fingerprint/status').catch(() => ({ available: false }))]);
+    let fpWanted = false; try { fpWanted = localStorage.getItem('fp-generate') === '1'; } catch { /* storage may be blocked */ }
     const bad = plan.pairs.filter((x) => !x.match).length;
     const connected = state.picard.status?.connected;
     openDialog(`<div class="dlg-head"><h3>Tag files for Picard</h3><p>${esc(plan.release.artist)} · ${esc(plan.release.title)}${plan.release.date ? ` (${esc(plan.release.date)})` : ''} · ${plan.release.track_count} tracks on MusicBrainz</p></div>
@@ -1545,15 +1546,22 @@ async function openPicardPlan() {
           ${plan.unmatched_release_tracks.map((t) => `<div class="pair nomatch"><span class="l">(no file)</span><span class="arrow">✕</span><span class="r">${t.disc > 1 ? `${t.disc}-` : ''}${t.position}. ${esc(t.title)}</span></div>`).join('')}
         </div>
       </div>
-      <div class="dlg-body" style="padding-top:0"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="pp-clear" checked style="margin-top:3px"><span>Clear Picard's file list first (recommended)<br><small class="note">“Save in Picard” saves <b>every</b> matched file Picard has loaded, so anything left from earlier albums would be re-saved and moved too. Unsaved edits made inside Picard are discarded.</small></span></label></div>
+      <div class="dlg-body" style="padding-top:0"><label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px" ${fpStatus.available ? '' : 'title="fpcalc isn\'t available in this container"'}><input type="checkbox" id="pp-fp" ${fpStatus.available ? '' : 'disabled'} ${fpStatus.available && fpWanted ? 'checked' : ''} style="margin-top:3px"><span>Generate AcoustID fingerprints first<br><small class="note">Calculated here with fpcalc and written to the files' tags, which Picard keeps. Nothing is looked up or matched, so no file can be re-matched.${fpStatus.available ? '' : ' (Unavailable: fpcalc isn\'t installed in this container.)'}</small></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="pp-clear" checked style="margin-top:3px"><span>Clear Picard's file list first (recommended)<br><small class="note">“Save in Picard” saves <b>every</b> matched file Picard has loaded, so anything left from earlier albums would be re-saved and moved too. Unsaved edits made inside Picard are discarded.</small></span></label></div>
       <div class="dlg-foot"><button class="btn" id="dlg-cancel">Cancel</button><button class="btn" id="pp-tag" title="Write the IDs but don't touch Picard">Tag files only</button><button class="btn primary" id="pp-send" ${connected ? '' : 'disabled'}>Tag &amp; load in Picard</button></div>`);
     $('#dlg-cancel').addEventListener('click', closeDialog);
     const run = (tagOnly) => async (e) => {
       const btn = e.currentTarget;
       busy(btn, true, 'Working…');
       try {
+        let fp = null;
+        if ($('#pp-fp')?.checked) {
+          try { localStorage.setItem('fp-generate', '1'); } catch { /* ignore */ }
+          fp = await runFingerprints(btn);
+        } else { try { localStorage.setItem('fp-generate', '0'); } catch { /* ignore */ } }
+        btn.innerHTML = '<span class="spinner"></span> Working…';
         const res = await api('POST', '/api/picard/send', { path: state.album.path, release_mbid: rel, tag_only: tagOnly, clear_picard: $('#pp-clear').checked });
-        state.picard.sent = res; state.picard.saved = false;
+        res.fp = fp; state.picard.sent = res; state.picard.saved = false;
         closeDialog(); renderPicardCard();
         toast(tagOnly ? `Tagged ${res.tagged} files.` : `Tagged ${res.tagged} files and loaded them in Picard.`, 'ok');
       } catch (err) { busy(btn, false); toast(err.message, 'error'); }
@@ -1561,6 +1569,18 @@ async function openPicardPlan() {
     $('#pp-tag').addEventListener('click', run(true));
     $('#pp-send').addEventListener('click', run(false));
   } catch (e) { closeDialog(); toast(e.message, 'error'); }
+}
+
+// Fingerprint the album's files on the server and show progress on the button until it's finished.
+async function runFingerprints(btn) {
+  const path = state.album.path;
+  let job = await api('POST', '/api/fingerprint/start', { path });
+  while (job.state === 'running') {
+    btn.innerHTML = `<span class="spinner"></span> Fingerprinting ${job.done} of ${job.total}…`;
+    await new Promise((r) => setTimeout(r, 700));
+    job = (await api('GET', `/api/fingerprint/status?path=${encodeURIComponent(path)}`)).job || job;
+  }
+  return { total: job.total, ok: job.total - job.errors.length, errors: job.errors };
 }
 
 async function picardSave() {
