@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "filestomb"
-version = "0.11.0"
+version = "0.12.0"
 description = "A keyboard-driven TUI for turning local albums into MusicBrainz edits"
 readme = "README.md"
 license = { text = "MIT" }

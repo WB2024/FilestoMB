@@ -29,7 +29,7 @@ from .. import archives, artwork, coverart, integrations, picard, releasetags, s
 from ..batch import store as batch_store_module
 from ..batch.runner import BatchManager
 from ..paths import config_dir
-from . import batch_api, enforcer_api, lidarr_api
+from . import batch_api, enforcer_api, lidarr_api, replaygain_api
 from ..config import Settings, load_settings
 from ..matching import match_album, match_artists
 from ..mb import seed
@@ -205,6 +205,7 @@ class SettingsIn(BaseModel):
     lidarr_auto: str | None = None
     enforcer_url: str | None = None
     enforcer_auto: str | None = None
+    rsgain_path: str | None = None
 
 
 class PicardReleaseIn(BaseModel):
@@ -1132,6 +1133,7 @@ def create_app(
     batch_api.register(app, batch, lambda rel: _resolve(root, rel))
     send_to_lidarr = lidarr_api.register(app, settings, root, lambda rel: _resolve(root, rel), client)
 
+    replaygain_api.register(app, root, lambda rel: _resolve(root, rel), refuse_during_batch)
     notify_enforcer = enforcer_api.register(app, settings, root, lambda rel: _resolve(root, rel))
 
     async def after_saved(folder: Path, release_mbid: str) -> str | None:

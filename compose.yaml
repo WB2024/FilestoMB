@@ -17,3 +17,6 @@ services:
       # remote-command pipe), shared with your Picard container. See the README.
       # Remove this line and PICARD_PIPE_DIR in .env if you don't use Picard.
       # - /opt/picard/run:/picard-run
+      # Optional ReplayGain: the folder holding the rsgain binary (read-only), then set
+      # RSGAIN_PATH=/rsgain/rsgain in .env or under Settings. See README.
+      # - /path/to/rsgain-folder:/rsgain:ro

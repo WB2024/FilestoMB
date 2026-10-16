@@ -529,6 +529,10 @@ async function openSettings() {
       <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-lauto" ${st.lidarr_auto?.value === '1' ? 'checked' : ''}> Batch mode sends each finished album to Lidarr automatically</label>
       <p class="note">Albums are added by their exact MusicBrainz release and Lidarr rescans the folder where Picard saved them. Files are never moved or renamed by Lidarr.</p>
       <div class="inline-actions" style="margin-bottom:18px">${lk.set ? '<button class="btn small" id="set-ltest">Test Lidarr</button>' : ''}</div>
+      <h4 style="margin:0 0 8px">ReplayGain (rsgain)</h4>
+      <label class="field"><span>Path to rsgain, inside this container</span><input id="set-rsgain" value="${val('rsgain_path')}" placeholder="/rsgain/rsgain"></label>
+      <p class="note">Mount the folder containing the rsgain binary (the one Picard's plugin uses) into this container. The options themselves are set on the Submit screen and remembered.</p>
+      <div class="inline-actions" style="margin-bottom:18px"></div>
       <h4 style="margin:0 0 8px">Music Genre Enforcer</h4>
       <label class="field"><span>URL</span><input id="set-eurl" value="${val('enforcer_url')}" placeholder="http://enforcer.local:8320"></label>
       <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-eauto" ${st.enforcer_auto?.value === '1' ? 'checked' : ''}> Batch mode tells it about each finished album</label>
@@ -538,10 +542,10 @@ async function openSettings() {
     <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button><button class="btn primary" id="set-save">Save</button></div>`);
   $('#dlg-cancel').addEventListener('click', closeDialog);
   $('#set-save').addEventListener('click', async () => {
-    const body = { lidarr_url: $('#set-lurl').value.trim(), lidarr_root_folder: $('#set-lroot').value.trim(), lidarr_library_path: $('#set-llib').value.trim(), lidarr_auto: $('#set-lauto').checked ? '1' : '', enforcer_url: $('#set-eurl').value.trim(), enforcer_auto: $('#set-eauto').checked ? '1' : '' };
+    const body = { lidarr_url: $('#set-lurl').value.trim(), lidarr_root_folder: $('#set-lroot').value.trim(), lidarr_library_path: $('#set-llib').value.trim(), lidarr_auto: $('#set-lauto').checked ? '1' : '', enforcer_url: $('#set-eurl').value.trim(), enforcer_auto: $('#set-eauto').checked ? '1' : '', rsgain_path: $('#set-rsgain').value.trim() };
     if ($('#set-fanart').value.trim()) body.fanart_api_key = $('#set-fanart').value.trim();
     if ($('#set-lkey').value.trim()) body.lidarr_api_key = $('#set-lkey').value.trim();
-    try { await api('PUT', '/api/settings', body); toast('Saved.', 'ok'); loadEnforcerStatus(); openSettings(); } catch (e) { toast(e.message, 'error'); }
+    try { await api('PUT', '/api/settings', body); toast('Saved.', 'ok'); state.rsgain.configured = null; loadEnforcerStatus(); openSettings(); } catch (e) { toast(e.message, 'error'); }
   });
   $('#set-clear')?.addEventListener('click', async () => { try { await api('PUT', '/api/settings', { fanart_api_key: '' }); toast('Key removed.'); openSettings(); } catch (e) { toast(e.message, 'error'); } });
   $('#set-test')?.addEventListener('click', async (e) => {
@@ -824,6 +828,7 @@ function renderSubmit() {
       </div>
     </div>
     <div class="card pad picard" id="picard-card"></div>
+    <div class="card pad" id="rsgain-card" style="margin-top:16px"></div>
     <div class="card pad" id="lidarr-card" style="margin-top:16px"></div>
     <div class="card pad" id="genre-card" style="margin-top:16px"></div>
   </section>
@@ -844,6 +849,7 @@ function renderSubmit() {
   wireCover();
   renderPicardCard();
   loadPicardStatus();
+  renderRsgainCard();
   renderLidarrCard();
   renderGenreCard();
   const cov = $('#cover-open');
@@ -977,6 +983,61 @@ async function renderGenres() {
     box.innerHTML = `<p class="note">${queue.length} to go · folder group ${esc(cur.group)}</p><div id="gv-review"></div>`;
     mountGenreReview($('#gv-review'), cur.name, { onSaved: () => renderGenres(), onSkip: () => { state.genresView.skipped.add(cur.name); renderGenres(); } });
   } catch (err) { $('#gv').innerHTML = `<p class="note">${esc(err.message)}</p>`; }
+}
+
+// ReplayGain: same rsgain scan as Picard's ReplayGain 2.0 plugin, run on the files Picard saved.
+state.rsgain = { configured: null, options: null, folders: null, chosen: '', result: null, working: false };
+async function renderRsgainCard() {
+  const el = $('#rsgain-card'); if (!el) return;
+  const R = state.rsgain; const rel = state.matches?.release?.selected;
+  if (R.forPath !== state.album.path) Object.assign(R, { forPath: state.album.path, folders: null, chosen: '', result: null });
+  if (R.configured === null) {
+    try { const s = await api('GET', '/api/replaygain/status'); R.configured = s.configured; R.options = s.options; } catch { R.configured = false; }
+  }
+  if (!R.configured) { el.innerHTML = '<h3>ReplayGain</h3><p class="note">Not set up. Mount the folder holding <code>rsgain</code> into the container and enter its path in Settings to calculate ReplayGain here.</p>'; return; }
+  const o = R.options; const folders = R.folders;
+  const sel = (v, cur, label) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`;
+  const chk = (id, on, label) => `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
+  const res = R.result;
+  el.innerHTML = `<h3>ReplayGain</h3>
+    <p class="note">Run this after Picard has saved the album and before Lidarr rescans it. It uses the same rsgain settings as Picard's ReplayGain 2.0 plugin (remembered for next time) and only touches files tagged with this release.</p>
+    <div class="inline-actions">
+      <button class="btn small" id="rg-find" ${rel ? '' : 'disabled'}>${ICON.search} Find where Picard saved it</button>
+      ${folders && folders.length ? `<select id="rg-folder">${folders.map((f) => `<option ${f === R.chosen ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>` : ''}
+    </div>
+    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first.</p>' : ''}
+    ${folders && folders.length ? `<div class="rg-opts" style="display:grid;gap:8px;margin:12px 0">
+      ${chk('rg-album', o.album, 'Calculate album gain/peak')}
+      ${chk('rg-tp', o.true_peak, 'Use true peak')}
+      ${chk('rg-ref', o.reference_tag, 'Write reference loudness tag')}
+      <label class="field"><span>Target loudness (LUFS)</span><input type="number" id="rg-target" min="-30" max="-5" step="1" value="${o.target}"></label>
+      <label class="field"><span>Clipping protection</span><select id="rg-clip">${sel('n', o.clip_mode, 'Disabled')}${sel('p', o.clip_mode, 'Enabled for positive gain values only')}${sel('a', o.clip_mode, 'Always enabled')}</select></label>
+      <label class="field"><span>Max peak (dB)</span><input type="number" id="rg-maxpeak" step="0.1" value="${o.max_peak}"></label>
+      <label class="field"><span>Opus files</span><select id="rg-opus">${sel('d', o.opus_mode, 'Write standard ReplayGain tags')}${sel('r', o.opus_mode, 'Write R128 gain tags')}${sel('s', o.opus_mode, 'R128 tags, referenced to -23 LUFS')}</select></label>
+    </div>
+    <div class="inline-actions"><button class="btn small" id="rg-scan">Scan only</button><button class="btn small primary" id="rg-write">Calculate &amp; write tags</button></div>` : ''}
+    ${rel ? '' : '<p class="note">Needs a release ID first.</p>'}
+    ${res ? `<div class="note" style="margin-top:10px">
+      <b style="color:var(${res.error ? '--warn' : '--ok'})">${esc(res.error || (res.wrote ? `Wrote ReplayGain tags to ${res.verified} of ${res.tracks.length} files.` : 'Scan only, nothing written.'))}</b>
+      ${res.tracks ? `<table class="rg-table" style="margin-top:6px;border-collapse:collapse"><tr><th align="left">Track</th><th>Loudness</th><th>Gain</th><th>Peak dB</th></tr>
+        ${[...res.tracks, ...(res.album ? [res.album] : [])].map((r) => `<tr><td>${esc(r.filename.split('/').pop())}</td><td align="right">${esc(r.loudness)}</td><td align="right">${esc(r.gain)}</td><td align="right">${esc(r.peak_db)}</td></tr>`).join('')}</table>` : ''}
+      ${(res.notes || []).map((n) => `<br>${esc(n)}`).join('')}</div>` : ''}`;
+  const read = () => {
+    R.chosen = $('#rg-folder').value;
+    R.options = { album: $('#rg-album').checked, true_peak: $('#rg-tp').checked, reference_tag: $('#rg-ref').checked, target: Number($('#rg-target').value), clip_mode: $('#rg-clip').value, max_peak: Number($('#rg-maxpeak').value), opus_mode: $('#rg-opus').value };
+  };
+  $('#rg-find')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true, 'Looking…');
+    try { R.folders = (await api('POST', '/api/lidarr/locate', { release_mbid: rel })).folders; R.chosen = R.folders[0] || ''; R.result = null; } catch (err) { toast(err.message, 'error'); }
+    renderRsgainCard();
+  });
+  const run = (write) => async (e) => {
+    const btn = e.currentTarget; read(); busy(btn, true, write ? 'Writing…' : 'Scanning…');
+    try { R.result = await api('POST', '/api/replaygain/run', { path: R.chosen, release_mbid: rel, write, options: R.options }); } catch (err) { R.result = { error: err.message }; }
+    renderRsgainCard();
+  };
+  $('#rg-scan')?.addEventListener('click', run(false));
+  $('#rg-write')?.addEventListener('click', run(true));
 }
 
 // Lidarr: after Picard has saved the album, register the exact release and let Lidarr map the files in place.

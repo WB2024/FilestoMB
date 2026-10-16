@@ -126,6 +126,7 @@ Each one is off until you configure it, and the app works fine without any of th
 | **[MusicBrainz Picard](https://picard.musicbrainz.org)** | One click writes the release IDs into your files and loads them in Picard, which then renames and moves them with *your* settings. FilesToMB never reimplements Picard's naming. |
 | **[Lidarr](https://lidarr.audio)** | Adds the album by its exact MusicBrainz release, pins that edition, and has Lidarr rescan the folder Picard saved to. Files are never moved or renamed by Lidarr. |
 | **[Music Genre Enforcer](https://github.com/WB2024/Artist-Genre-Metadata-Enforcer)** | New artists show up in a *Genres* queue inside FilesToMB, with Last.fm suggestions. The enforcer keeps the genres and writes the tags; FilesToMB only calls its API. |
+| **ReplayGain ([rsgain](https://github.com/complexlogic/rsgain))** | Runs the same scan as Picard's *ReplayGain 2.0* plugin on the files Picard saved, shows the numbers, then writes the tags. Options are remembered. |
 | **fanart.tv** | A second source for cover art next to the Cover Art Archive. |
 | **Userscript** | Tampermonkey/Violentmonkey script served by your own instance: attaches cover art on MusicBrainz's upload page and sends newly created IDs back to the app. It never submits an edit. |
 
@@ -148,6 +149,22 @@ PICARD_DEST_ROOT=/music/Clean     # where Picard saves, as seen by FilesToMB
 ```
 
 Picard must not be set to ignore MBIDs when loading files (the default). `PICARD_DEST_ROOT` lets batch mode *verify* that files really arrived with the right release ID, so set it.
+</details>
+
+<details>
+<summary><b>ReplayGain setup</b></summary>
+
+Download [rsgain](https://github.com/complexlogic/rsgain/releases) (or reuse the copy Picard's plugin points at), mount its folder read-only, and tell FilesToMB where the binary is:
+
+```yaml
+- /path/to/rsgain-folder:/rsgain:ro
+```
+
+```env
+RSGAIN_PATH=/rsgain/rsgain
+```
+
+On the Submit screen, after Picard has saved the album, the **ReplayGain** card finds the saved folder, offers the plugin's options (album gain, true peak, reference tag, target loudness, clipping protection, max peak, Opus mode) and either scans only or writes the tags. Run it before adding to Lidarr. Only files tagged with the release are touched.
 </details>
 
 <details>

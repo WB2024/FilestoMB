@@ -27,6 +27,16 @@ ENV_NAMES = {
     "enforcer_url": "ENFORCER_URL",
     # "1" = batch mode tells the enforcer about each finished album
     "enforcer_auto": "ENFORCER_AUTO",
+    # Path to the rsgain binary as FilesToMB sees it, e.g. /rsgain/rsgain
+    "rsgain_path": "RSGAIN_PATH",
+    # Last-used ReplayGain options (remembered between albums)
+    "rsgain_album": "RSGAIN_ALBUM",
+    "rsgain_true_peak": "RSGAIN_TRUE_PEAK",
+    "rsgain_reference": "RSGAIN_REFERENCE",
+    "rsgain_target": "RSGAIN_TARGET",
+    "rsgain_clip": "RSGAIN_CLIP",
+    "rsgain_max_peak": "RSGAIN_MAX_PEAK",
+    "rsgain_opus": "RSGAIN_OPUS",
 }
 FIELDS = tuple(ENV_NAMES)
 
