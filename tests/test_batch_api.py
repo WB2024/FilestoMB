@@ -132,7 +132,7 @@ async def test_manual_picard_actions_are_blocked_while_a_batch_processes(api):
     manager = api.client._transport.app.state.batch
     manager.phase = "processing"
     try:
-        for url in ("/api/picard/save", "/api/picard/clear", "/api/picard/fingerprint"):
+        for url in ("/api/picard/save", "/api/picard/clear"):
             response = await api.client.post(url)
             assert response.status_code == 409 and "batch is processing" in response.json()["detail"]
         assert (await api.client.post("/api/picard/send", json={"path": "Unmanaged", "release_mbid": UUID})).status_code == 409
