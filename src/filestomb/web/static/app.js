@@ -70,7 +70,7 @@ const state = {
   maxStep: 0,
   extracted: {},     // archive path -> {path, name, files} once extracted this session
   highlight: null,   // folder path to spotlight after an extraction
-  picard: { status: null, statusAt: 0, sent: null, saved: false, fingerprinted: false },
+  picard: { status: null, statusAt: 0, sent: null, saved: false, fingerprinted: false, clearAfter: true },
   favs: [],          // favourite folders: [{path, name, parent}]
 };
 
@@ -1501,7 +1501,7 @@ function renderPicardCard() {
       ${step(1, !!sent, 'Tag files and load in Picard', sent ? `${sent.tagged} file${sent.tagged === 1 ? '' : 's'} tagged · ${sent.matched} matched to the release${sent.loaded ? ' · loaded in Picard' : ''}` : 'Writes this release\'s MusicBrainz IDs into the files so Picard puts them straight onto it.', `<button class="btn ${sent ? '' : 'primary'}" id="picard-send" ${rel && st.connected ? '' : 'disabled'} title="${rel ? (st.connected ? '' : 'Picard isn\'t reachable') : 'Needs a release ID first'}">${sent ? 'Redo' : 'Preview &amp; send'}</button>`)}
       ${step(2, !!sent && p.saved, 'Check it in Picard', 'The files should appear matched under your release. Fix anything odd there.', open)}
       ${step(3, p.fingerprinted, 'Generate AcoustID fingerprints (optional)', p.fingerprinted ? 'Requested. Picard calculates them in the background; they are written to the files when you save.' : 'Picard fingerprints the matched files so the AcoustID is saved into their tags. Runs for every matched file in Picard and can take a while.', `<button class="btn" id="picard-fingerprint" ${sent && st.connected ? '' : 'disabled'}>${p.fingerprinted ? 'Run again' : 'Generate'}</button>`)}
-      ${step(4, p.saved, 'Save in Picard', p.saved ? 'Save requested. Picard is rewriting tags and moving files with your own settings, so the folder may have moved.' : 'Saves every matched file currently in Picard (not just this album). Tags, renaming and moving follow your own Picard settings.', `<button class="btn ${sent && !p.saved ? 'primary' : ''}" id="picard-save" ${sent && st.connected ? '' : 'disabled'}>${p.saved ? 'Save again' : 'Save in Picard'}</button>${p.saved ? '<button class="btn" id="picard-clear" title="Remove saved files from Picard\'s album pane">Clear saved</button>' : ''}`)}
+      ${step(4, p.saved, 'Save in Picard', p.saved ? 'Save requested. Picard is rewriting tags and moving files with your own settings, so the folder may have moved.' : 'Saves every matched file currently in Picard (not just this album). Tags, renaming and moving follow your own Picard settings.', `<label class="note" style="display:flex;gap:6px;align-items:center" title="Once the files are written, remove them (and their albums) from Picard so the next save only touches the next album"><input type="checkbox" id="picard-clearafter" ${p.clearAfter ? 'checked' : ''}> Clear from Picard after</label><button class="btn ${sent && !p.saved ? 'primary' : ''}" id="picard-save" ${sent && st.connected ? '' : 'disabled'}>${p.saved ? 'Save again' : 'Save in Picard'}</button>${p.saved ? '<button class="btn" id="picard-clear" title="Remove saved files from Picard\'s album pane">Clear saved</button>' : ''}`)}
     </div>`;
   }
   host.innerHTML = `<div class="picard-head"><h3>Picard</h3>${pill}<span class="note grow">Tag, load and save in your Picard without leaving FilesToMB.</span><button class="btn small ghost" id="picard-refresh" title="Re-check the connection">Refresh</button></div>${body}`;
@@ -1561,9 +1561,11 @@ async function picardSave() {
   const btn = $('#picard-save');
   busy(btn, true, 'Sending…');
   try {
-    await api('POST', '/api/picard/save');
+    const clearAfter = $('#picard-clearafter')?.checked ?? false;
+    state.picard.clearAfter = clearAfter;
+    const res = await api('POST', '/api/picard/save', { release_mbid: state.matches?.release?.selected || null, clear_after: clearAfter });
     state.picard.saved = true;
-    toast('Told Picard to save. Watch its window for progress.', 'ok');
+    toast(res.clear_after ? 'Told Picard to save. It will be cleared once the files are written.' : 'Told Picard to save. Watch its window for progress.', 'ok');
   } catch (e) { toast(e.message, 'error'); }
   renderPicardCard();
 }

@@ -46,9 +46,9 @@ def fake_rsgain(tmp_path):
 def test_command_mirrors_the_picard_plugin_options(tmp_path):
     o = replaygain.Options(album=True, true_peak=True, target=-18, clip_mode="p", max_peak=0, opus_mode="d")
     cmd = replaygain.build_command(Path("/rsgain"), o, [Path("/a.flac")], write=False)
-    assert cmd[:7] == ["/rsgain", "custom", "-O", "-p", "-s", "s", "-a"]
-    assert ["-l", "-18", "-c", "p", "-m", "0", "-o", "d"] == cmd[8:16] and "-t" in cmd and cmd[-1] == "/a.flac"
-    assert replaygain.build_command(Path("/rsgain"), o, [], write=True)[5] == "i"
+    assert cmd[:6] == ["/rsgain", "custom", "-O", "-s", "s", "-a"] and "-p" not in cmd
+    assert ["-l", "-18", "-c", "p", "-m", "0", "-o", "d"] == cmd[7:15] and "-t" in cmd and cmd[-1] == "/a.flac"
+    assert replaygain.build_command(Path("/rsgain"), o, [], write=True)[4] == "i"
 
 
 @pytest.mark.parametrize("bad", [{"target": 0}, {"target": -40}, {"clip_mode": "x"}, {"opus_mode": "z"}])

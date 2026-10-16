@@ -317,15 +317,15 @@ async def test_send_can_clear_picard_first(web):
     respx.get(f"https://musicbrainz.org/ws/2/release/{RELEASE_ID}").respond(json=release_json(["Opener", "Closer"]))
     res = await client.post("/api/picard/send", json={"path": "Unmanaged/Great Album [FLAC]", "release_mbid": RELEASE_ID, "clear_picard": True})
     assert res.json()["loaded"] is True
-    assert (await wait_for(received)).startswith(b"REMOVE_ALL\0LOAD ")
+    assert (await wait_for(received)).startswith(b"REMOVE_ALL\0REMOVE_EMPTY\0LOAD ")
 
 
 async def test_save_and_clear_send_picard_commands(web):
     client, _, received = web
-    assert (await client.post("/api/picard/save")).json() == {"ok": True}
+    assert (await client.post("/api/picard/save")).json() == {"ok": True, "clear_after": False}
     assert (await wait_for(received)) == b"SAVE_MATCHED\0"
     assert (await client.post("/api/picard/clear")).json() == {"ok": True}
-    assert (await wait_for(received, 2)).endswith(b"REMOVE_SAVED\0")
+    assert (await wait_for(received, 2)).endswith(b"REMOVE_SAVED\0REMOVE_EMPTY\0")
 
 
 async def test_fingerprint_sends_picard_command(web):
@@ -338,3 +338,25 @@ async def test_fingerprint_sends_picard_command(web):
 async def test_plan_validates_input(web, path, mbid, status):
     client, _, _ = web
     assert (await client.post("/api/picard/plan", json={"path": path, "release_mbid": mbid})).status_code == status
+
+
+async def test_save_can_clear_picard_once_the_files_are_written(tmp_path, make_flac, monkeypatch, fifo):
+    import filestomb.web.server as server
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setattr(server, "CLEAR_POLL_SECONDS", 0.01)
+    pipe_dir, received = fifo
+    library = tmp_path / "library"
+    make_flac({"title": "Opener", "musicbrainz_albumid": RELEASE_ID}, library / "Clean" / "Great Album")
+    settings = Settings(app_name="T", app_version="0", contact="t@example.com", api_base_url="https://musicbrainz.org/ws/2",
+                        music_root=library, picard_pipe_dir=str(pipe_dir), picard_dest_root=str(library / "Clean"))
+    app = create_app(settings)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        res = (await client.post("/api/picard/save", json={"release_mbid": RELEASE_ID, "clear_after": True})).json()
+        assert res == {"ok": True, "clear_after": True}
+        assert (await wait_for(received, 3)) == b"SAVE_MATCHED\0REMOVE_SAVED\0REMOVE_EMPTY\0"
+
+
+async def test_save_does_not_clear_without_a_destination_root(web):
+    client, _, _ = web
+    res = (await client.post("/api/picard/save", json={"release_mbid": RELEASE_ID, "clear_after": True})).json()
+    assert res == {"ok": True, "clear_after": False}

@@ -12,6 +12,7 @@ exposed and `..` tricks are rejected.
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import re
 from contextlib import asynccontextmanager
@@ -27,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from .. import archives, artwork, coverart, integrations, picard, releasetags, state, tags
 from ..batch import store as batch_store_module
-from ..batch.runner import BatchManager
+from ..batch.runner import BatchManager, locate_moved
 from ..paths import config_dir
 from . import batch_api, enforcer_api, lidarr_api, replaygain_api
 from ..config import Settings, load_settings
@@ -42,6 +43,8 @@ USERSCRIPT_TEMPLATE = Path(__file__).parent / "userscript.js"
 # Bump when userscript.js changes so installed copies auto-update.
 USERSCRIPT_VERSION = "1.2.0"
 COVER_MAX_BYTES = 20 * 1024 * 1024
+CLEAR_POLL_SECONDS = 3.0  # how often to look for Picard's saved files before clearing it
+CLEAR_POLL_LIMIT = 100  # ...for about five minutes
 PICKABLE_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 CAPTURE_ENTITIES = {"artist", "label", "release-group", "release"}
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
@@ -206,6 +209,11 @@ class SettingsIn(BaseModel):
     enforcer_url: str | None = None
     enforcer_auto: str | None = None
     rsgain_path: str | None = None
+
+
+class PicardSaveIn(BaseModel):
+    release_mbid: str | None = None
+    clear_after: bool = False  # remove the saved files from Picard once they've all been written
 
 
 class PicardReleaseIn(BaseModel):
@@ -1088,7 +1096,7 @@ def create_app(
                 await asyncio.to_thread(
                     picard.send,
                     settings.picard_pipe_dir,
-                    *([("REMOVE_ALL", "")] if body.clear_picard else []),
+                    *([("REMOVE_ALL", ""), ("REMOVE_EMPTY", "")] if body.clear_picard else []),
                     ("LOAD", picard.to_picard_path(directory, root, settings.picard_library_root)),
                 )
                 loaded = True
@@ -1119,17 +1127,44 @@ def create_app(
         refuse_during_batch()
         return await picard_command(("FINGERPRINT", ""))
 
+    clear_tasks: set[asyncio.Task] = set()
+
+    async def clear_when_saved(release_mbid: str) -> None:
+        """Picard saves in the background and only removes files that have finished, so wait
+        until the release's files have appeared at the destination (and stopped appearing)."""
+        dest, since = Path(settings.picard_dest_root), time.time()
+        last, stable = -1, 0
+        for _ in range(CLEAR_POLL_LIMIT):
+            await asyncio.sleep(CLEAR_POLL_SECONDS)
+            found = len(await asyncio.to_thread(locate_moved, dest, since, release_mbid))
+            stable = stable + 1 if found and found == last else 0
+            last = found
+            if stable >= 2:
+                break
+        else:
+            return
+        try:
+            await asyncio.to_thread(picard.send, settings.picard_pipe_dir, ("REMOVE_SAVED", ""), ("REMOVE_EMPTY", ""))
+        except picard.PicardUnavailable:
+            pass
+
     @app.post("/api/picard/save")
-    async def picard_save() -> dict:
+    async def picard_save(body: PicardSaveIn | None = None) -> dict:
         """Picard's "Save" for every matched file: rewrites tags, renames and moves per your Picard settings."""
         refuse_during_batch()
-        return await picard_command(("SAVE_MATCHED", ""))
+        result = await picard_command(("SAVE_MATCHED", ""))
+        will_clear = bool(body and body.clear_after and body.release_mbid and settings.picard_dest_root)
+        if will_clear:
+            task = asyncio.create_task(clear_when_saved(body.release_mbid))
+            clear_tasks.add(task)
+            task.add_done_callback(clear_tasks.discard)
+        return {**result, "clear_after": will_clear}
 
     @app.post("/api/picard/clear")
     async def picard_clear() -> dict:
-        """Remove already-saved files from Picard's album pane."""
+        """Remove already-saved files (and the albums left empty) from Picard."""
         refuse_during_batch()
-        return await picard_command(("REMOVE_SAVED", ""))
+        return await picard_command(("REMOVE_SAVED", ""), ("REMOVE_EMPTY", ""))
 
     app.state.batch = app_state_batch
     batch_api.register(app, batch, lambda rel: _resolve(root, rel))

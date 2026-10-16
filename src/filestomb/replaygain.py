@@ -76,7 +76,7 @@ def check_binary(path: str) -> Path:
 
 
 def build_command(binary: Path, options: Options, files: list[Path], write: bool) -> list[str]:
-    cmd = [str(binary), "custom", "-O", "-p", "-s", "i" if write else "s"]
+    cmd = [str(binary), "custom", "-O", "-s", "i" if write else "s"]
     if options.album:
         cmd.append("-a")
     if options.true_peak:
@@ -138,7 +138,10 @@ def _set_reference_loudness(path: Path, target: float) -> bool:
             return False
         return True
     finally:
-        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        try:  # best effort: needs ownership of the file, which Picard's saved files may not give us
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        except OSError:
+            pass
 
 
 def _has_track_gain(path: Path) -> bool:
