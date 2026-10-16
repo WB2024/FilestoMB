@@ -1408,10 +1408,29 @@ async function nextInQueue() {
 
 function batchBar() {
   if (!state.batchCtx) return '';
-  return `<button class="btn" id="bt-back" title="Back to the batch list">${ICON.back} Batch list</button>`;
+  return `<button class="btn" id="bt-back" title="Back to the batch list">${ICON.back} Batch list</button><button class="btn" id="bt-skip" title="Mark this album as skipped and open the next one in the list">Skip ${ICON.chev}</button>`;
+}
+
+// Mark the open album as skipped in the batch and move on to the next one in the list we came from.
+async function skipCurrent(e) {
+  const ctx = state.batchCtx; const path = state.album?.path;
+  if (!ctx || !path) return;
+  const btn = e.currentTarget; busy(btn, true, 'Skipping…');
+  try {
+    const status = ctx.tab || 'missing';
+    const { albums } = await api('GET', `/api/batch/albums?root=${encodeURIComponent(ctx.root)}&status=${status}&limit=500`);
+    const idx = albums.findIndex((a) => a.path === path);
+    await api('POST', '/api/batch/resolve', { path, action: 'skip' });
+    const next = idx >= 0 ? albums[idx + 1] : albums[0];
+    toast('Skipped.', 'ok');
+    if (!next || next.path === path) return openLibrary(ctx.root);
+    state.batchCtx = ctx;
+    await scan(next.path);
+  } catch (err) { busy(btn, false); toast(err.message, 'error'); }
 }
 function wireBatchBar() {
   $('#bt-back')?.addEventListener('click', () => openLibrary(state.batchCtx.root));
+  $('#bt-skip')?.addEventListener('click', skipCurrent);
   $('#bt-next')?.addEventListener('click', nextInQueue);
 }
 
