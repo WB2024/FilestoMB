@@ -212,6 +212,7 @@ class PicardReleaseIn(BaseModel):
     path: str
     release_mbid: str
     tag_only: bool = False
+    clear_picard: bool = False  # empty Picard's file lists first so a later Save can only touch this album
 
 
 class CodeIn(BaseModel):
@@ -1087,6 +1088,7 @@ def create_app(
                 await asyncio.to_thread(
                     picard.send,
                     settings.picard_pipe_dir,
+                    *([("REMOVE_ALL", "")] if body.clear_picard else []),
                     ("LOAD", picard.to_picard_path(directory, root, settings.picard_library_root)),
                 )
                 loaded = True

@@ -311,6 +311,15 @@ async def test_send_changes_nothing_when_picard_is_down(web, monkeypatch):
     assert tagged.json()["loaded"] is False and tagged.json()["tagged"] == 2
 
 
+@respx.mock
+async def test_send_can_clear_picard_first(web):
+    client, album, received = web
+    respx.get(f"https://musicbrainz.org/ws/2/release/{RELEASE_ID}").respond(json=release_json(["Opener", "Closer"]))
+    res = await client.post("/api/picard/send", json={"path": "Unmanaged/Great Album [FLAC]", "release_mbid": RELEASE_ID, "clear_picard": True})
+    assert res.json()["loaded"] is True
+    assert (await wait_for(received)).startswith(b"REMOVE_ALL\0LOAD ")
+
+
 async def test_save_and_clear_send_picard_commands(web):
     client, _, received = web
     assert (await client.post("/api/picard/save")).json() == {"ok": True}

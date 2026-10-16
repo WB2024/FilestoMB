@@ -1005,7 +1005,7 @@ async function renderRsgainCard() {
       <button class="btn small" id="rg-find" ${rel ? '' : 'disabled'}>${ICON.search} Find where Picard saved it</button>
       ${folders && folders.length ? `<select id="rg-folder">${folders.map((f) => `<option ${f === R.chosen ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>` : ''}
     </div>
-    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first.</p>' : ''}
+    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first, or give it a moment: it saves everything it has loaded before this album.</p>' : ''}
     ${folders && folders.length ? `<div class="rg-opts" style="display:grid;gap:8px;margin:12px 0">
       ${chk('rg-album', o.album, 'Calculate album gain/peak')}
       ${chk('rg-tp', o.true_peak, 'Use true peak')}
@@ -1056,7 +1056,7 @@ async function renderLidarrCard() {
       ${folders && folders.length ? `<select id="ld-folder">${folders.map((f) => `<option ${f === L.chosen ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
         <button class="btn small" id="ld-dry">Check only</button><button class="btn small primary" id="ld-send">Add to Lidarr</button>` : ''}
     </div>
-    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first.</p>' : ''}
+    ${folders && !folders.length ? '<p class="note">No freshly saved files with this release ID were found yet. Save in Picard first, or give it a moment: it saves everything it has loaded before this album.</p>' : ''}
     ${rel ? '' : '<p class="note">Needs a release ID first.</p>'}
     ${L.result ? `<div class="note" style="margin-top:10px"><b style="color:var(${L.result.ok ? '--ok' : '--warn'})">${esc(L.result.summary)}</b>${L.result.dry_run ? ' (check only, nothing changed)' : ''}<br>${L.result.steps.map(esc).join(' → ')}${L.result.url ? ` <a href="${esc(L.result.url)}" target="_blank" rel="noopener">Open in Lidarr</a>` : ''}</div>` : ''}`;
   $('#ld-find')?.addEventListener('click', async (e) => {
@@ -1528,13 +1528,14 @@ async function openPicardPlan() {
           ${plan.unmatched_release_tracks.map((t) => `<div class="pair nomatch"><span class="l">(no file)</span><span class="arrow">✕</span><span class="r">${t.disc > 1 ? `${t.disc}-` : ''}${t.position}. ${esc(t.title)}</span></div>`).join('')}
         </div>
       </div>
+      <div class="dlg-body" style="padding-top:0"><label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="pp-clear" checked style="margin-top:3px"><span>Clear Picard's file list first (recommended)<br><small class="note">“Save in Picard” saves <b>every</b> matched file Picard has loaded, so anything left from earlier albums would be re-saved and moved too. Unsaved edits made inside Picard are discarded.</small></span></label></div>
       <div class="dlg-foot"><button class="btn" id="dlg-cancel">Cancel</button><button class="btn" id="pp-tag" title="Write the IDs but don't touch Picard">Tag files only</button><button class="btn primary" id="pp-send" ${connected ? '' : 'disabled'}>Tag &amp; load in Picard</button></div>`);
     $('#dlg-cancel').addEventListener('click', closeDialog);
     const run = (tagOnly) => async (e) => {
       const btn = e.currentTarget;
       busy(btn, true, 'Working…');
       try {
-        const res = await api('POST', '/api/picard/send', { path: state.album.path, release_mbid: rel, tag_only: tagOnly });
+        const res = await api('POST', '/api/picard/send', { path: state.album.path, release_mbid: rel, tag_only: tagOnly, clear_picard: $('#pp-clear').checked });
         state.picard.sent = res; state.picard.saved = false; state.picard.fingerprinted = false;
         closeDialog(); renderPicardCard();
         toast(tagOnly ? `Tagged ${res.tagged} files.` : `Tagged ${res.tagged} files and loaded them in Picard.`, 'ok');
