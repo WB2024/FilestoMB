@@ -1110,6 +1110,12 @@ def create_app(
             raise HTTPException(503, str(error))
         return {"ok": True}
 
+    @app.post("/api/picard/fingerprint")
+    async def picard_fingerprint() -> dict:
+        """Ask Picard to calculate AcoustID fingerprints for the matched files (they're written on Save)."""
+        refuse_during_batch()
+        return await picard_command(("FINGERPRINT", ""))
+
     @app.post("/api/picard/save")
     async def picard_save() -> dict:
         """Picard's "Save" for every matched file: rewrites tags, renames and moves per your Picard settings."""

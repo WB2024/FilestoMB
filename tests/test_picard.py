@@ -319,6 +319,12 @@ async def test_save_and_clear_send_picard_commands(web):
     assert (await wait_for(received, 2)).endswith(b"REMOVE_SAVED\0")
 
 
+async def test_fingerprint_sends_picard_command(web):
+    client, _, received = web
+    assert (await client.post("/api/picard/fingerprint")).json() == {"ok": True}
+    assert (await wait_for(received)) == b"FINGERPRINT\0"
+
+
 @pytest.mark.parametrize("path,mbid,status", [("../x", RELEASE_ID, 400), ("Unmanaged", "not-an-id", 422), ("Nope", RELEASE_ID, 404)])
 async def test_plan_validates_input(web, path, mbid, status):
     client, _, _ = web
