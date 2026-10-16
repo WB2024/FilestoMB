@@ -30,7 +30,7 @@ from .. import archives, artwork, coverart, integrations, picard, releasetags, s
 from ..batch import store as batch_store_module
 from ..batch.runner import BatchManager, locate_moved
 from ..paths import config_dir
-from . import batch_api, enforcer_api, fingerprint_api, lidarr_api, replaygain_api
+from . import batch_api, enforcer_api, fingerprint_api, library_api, lidarr_api, replaygain_api
 from ..config import Settings, load_settings
 from ..matching import match_album, match_artists
 from ..mb import seed
@@ -209,6 +209,8 @@ class SettingsIn(BaseModel):
     enforcer_url: str | None = None
     enforcer_auto: str | None = None
     rsgain_path: str | None = None
+    clean_library: str | None = None
+    replaced_folder: str | None = None
 
 
 class PicardSaveIn(BaseModel):
@@ -415,6 +417,16 @@ def create_app(
         picard_library_root=settings.picard_library_root,
         dest_root=Path(settings.picard_dest_root) if settings.picard_dest_root else None,
     )
+
+    library_service = library_api.make(settings, root)
+
+    async def library_guard(directory: Path, release_mbid: str) -> str | None:
+        if library_service.clean_root() is None:
+            return None
+        await asyncio.to_thread(library_service.refresh_blocking)  # incremental: only changed folders are re-read
+        return library_service.guard_message(directory, release_mbid)
+
+    batch.before_import = library_guard
 
     app_state_batch = batch  # exposed as app.state.batch below (tests and diagnostics)
 
@@ -744,6 +756,8 @@ def create_app(
     @app.put("/api/settings")
     async def put_settings(body: SettingsIn) -> dict:
         integrations.update(body.model_dump())
+        if body.clean_library is not None or body.replaced_folder is not None:
+            library_service.refresh_in_background()
         return integrations.public_view()
 
     @app.post("/api/settings/test-fanart")
@@ -1162,13 +1176,15 @@ def create_app(
 
     app.state.batch = app_state_batch
     batch_api.register(app, batch, lambda rel: _resolve(root, rel))
-    send_to_lidarr = lidarr_api.register(app, settings, root, lambda rel: _resolve(root, rel), client)
+    send_to_lidarr = lidarr_api.register(app, settings, root, lambda rel: _resolve(root, rel), client, on_found=library_service.refresh_folder)
 
+    library_api.register(app, library_service, lambda rel: _resolve(root, rel), refuse_during_batch)
     fingerprint_api.register(app, lambda rel: _resolve(root, rel), refuse_during_batch)
     replaygain_api.register(app, root, lambda rel: _resolve(root, rel), refuse_during_batch)
     notify_enforcer = enforcer_api.register(app, settings, root, lambda rel: _resolve(root, rel))
 
     async def after_saved(folder: Path, release_mbid: str) -> str | None:
+        await asyncio.to_thread(library_service.refresh_folder, folder)
         notes = []
         if integrations.get("lidarr_auto") == "1" and lidarr_api.configured():
             outcome = await send_to_lidarr(folder, release_mbid)

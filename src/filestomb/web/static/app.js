@@ -511,6 +511,7 @@ async function openSettings() {
   let st;
   try { st = await api('GET', '/api/settings'); } catch (e) { toast(e.message, 'error'); return; }
   const f = st.fanart_api_key; const lk = st.lidarr_api_key;
+  let lib = null; try { lib = await api('GET', '/api/library/status'); } catch { /* not critical */ }
   const val = (k) => esc(st[k]?.value || '');
   const tag = (x) => (x.set ? '<b style="color:var(--ok)">· saved</b>' : '') + (x.from_env ? ' <small>(from environment)</small>' : '');
   openDialog(`<div class="dlg-head"><h3>Settings</h3><p>Optional services. Keys are stored on the server in its config folder and never shown again.</p></div>
@@ -529,6 +530,11 @@ async function openSettings() {
       <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input type="checkbox" id="set-lauto" ${st.lidarr_auto?.value === '1' ? 'checked' : ''}> Batch mode sends each finished album to Lidarr automatically</label>
       <p class="note">Albums are added by their exact MusicBrainz release and Lidarr rescans the folder where Picard saved them. Files are never moved or renamed by Lidarr.</p>
       <div class="inline-actions" style="margin-bottom:18px">${lk.set ? '<button class="btn small" id="set-ltest">Test Lidarr</button>' : ''}</div>
+      <h4 style="margin:0 0 8px">Clean library</h4>
+      <label class="field"><span>Folder, as this container sees it</span><input id="set-clean" value="${val('clean_library')}" placeholder="${esc(lib?.clean || '/music/Media/Audio/Music/Sources/Clean')}"></label>
+      <label class="field"><span>Where replaced albums are moved <small>(optional)</small></span><input id="set-replaced" value="${val('replaced_folder')}" placeholder="${esc(lib?.archive || 'a “Replaced” folder beside the Clean library')}"></label>
+      <p class="note">Before an album is imported, FilesToMB checks whether this release is already in the library and compares the quality. If you choose to replace the existing copy it is <b>moved</b> to the folder above (never deleted). Leave the folder blank to use <code>PICARD_DEST_ROOT</code>.</p>
+      <div class="inline-actions" style="margin-bottom:18px"><span class="note grow" id="set-libstatus">${lib?.configured ? (lib.building ? `Indexing… ${lib.progress?.folders_seen || 0} folders so far` : lib.last_built ? `${lib.folders} album folders indexed` : 'Not indexed yet') : 'Not set up'}</span>${lib?.configured ? '<button class="btn small" id="set-reindex">Re-scan library</button>' : ''}</div>
       <h4 style="margin:0 0 8px">ReplayGain (rsgain)</h4>
       <label class="field"><span>Path to rsgain, inside this container</span><input id="set-rsgain" value="${val('rsgain_path')}" placeholder="/rsgain/rsgain"></label>
       <p class="note">Mount the folder containing the rsgain binary (the one Picard's plugin uses) into this container. The options themselves are set on the Submit screen and remembered.</p>
@@ -542,7 +548,7 @@ async function openSettings() {
     <div class="dlg-foot"><button class="btn" id="dlg-cancel">Close</button><button class="btn primary" id="set-save">Save</button></div>`);
   $('#dlg-cancel').addEventListener('click', closeDialog);
   $('#set-save').addEventListener('click', async () => {
-    const body = { lidarr_url: $('#set-lurl').value.trim(), lidarr_root_folder: $('#set-lroot').value.trim(), lidarr_library_path: $('#set-llib').value.trim(), lidarr_auto: $('#set-lauto').checked ? '1' : '', enforcer_url: $('#set-eurl').value.trim(), enforcer_auto: $('#set-eauto').checked ? '1' : '', rsgain_path: $('#set-rsgain').value.trim() };
+    const body = { lidarr_url: $('#set-lurl').value.trim(), lidarr_root_folder: $('#set-lroot').value.trim(), lidarr_library_path: $('#set-llib').value.trim(), lidarr_auto: $('#set-lauto').checked ? '1' : '', enforcer_url: $('#set-eurl').value.trim(), enforcer_auto: $('#set-eauto').checked ? '1' : '', rsgain_path: $('#set-rsgain').value.trim(), clean_library: $('#set-clean').value.trim(), replaced_folder: $('#set-replaced').value.trim() };
     if ($('#set-fanart').value.trim()) body.fanart_api_key = $('#set-fanart').value.trim();
     if ($('#set-lkey').value.trim()) body.lidarr_api_key = $('#set-lkey').value.trim();
     try { await api('PUT', '/api/settings', body); toast('Saved.', 'ok'); state.rsgain.configured = null; loadEnforcerStatus(); openSettings(); } catch (e) { toast(e.message, 'error'); }
@@ -558,6 +564,11 @@ async function openSettings() {
     const btn = e.currentTarget;
     busy(btn, true, 'Testing…');
     try { const r = await api('POST', '/api/settings/test-enforcer'); toast(`Connected: ${r.artists} artists, ${r.undefined} still need a genre.`, 'ok'); } catch (err) { toast(err.message, 'error'); }
+    busy(btn, false);
+  });
+  $('#set-reindex')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true, 'Scanning…');
+    try { await api('POST', '/api/library/reindex'); toast('Scanning the Clean library in the background.', 'ok'); } catch (err) { toast(err.message, 'error'); }
     busy(btn, false);
   });
   $('#set-ltest')?.addEventListener('click', async (e) => {
@@ -1533,27 +1544,48 @@ async function openPicardPlan() {
   const rel = state.matches.release?.selected;
   openDialog('<div class="dlg-head"><h3>Matching tracks…</h3></div><div class="dlg-body"><div class="scanning" style="padding:30px 0"><span class="spinner"></span></div></div>');
   try {
-    const [plan, fpStatus] = await Promise.all([api('POST', '/api/picard/plan', { path: state.album.path, release_mbid: rel }), api('GET', '/api/fingerprint/status').catch(() => ({ available: false }))]);
+    const [plan, fpStatus, dup] = await Promise.all([api('POST', '/api/picard/plan', { path: state.album.path, release_mbid: rel }), api('GET', '/api/fingerprint/status').catch(() => ({ available: false })), api('POST', '/api/library/check', { path: state.album.path, release_mbid: rel }).catch(() => null)]);
+    const dups = dup?.matches || [];
+    const VERDICT = { existing_better: 'The existing copy looks better', new_better: 'This copy looks better', similar: 'Similar quality' };
+    const dupHtml = dups.length ? `<div class="banner">${ICON.alert.replace('<svg', '<svg width="18" height="18"')}<span><b>This release is already in your library.</b> Importing it again would merge into or duplicate the existing folder. Compare, then choose.</span></div>
+      ${dups.map((m) => `<div class="card pad" style="margin:8px 0"><div><b>${esc(m.folder)}</b>${m.other_files ? ` <small class="note">(+${m.other_files} file${m.other_files === 1 ? '' : 's'} from another edition in that folder, left alone)</small>` : ''}</div><div class="note">Existing: ${esc(m.existing)}<br>This one: ${esc(m.new)}</div><div style="margin-top:6px"><b style="color:var(${m.verdict === 'existing_better' ? '--warn' : '--ok'})">${VERDICT[m.verdict]}</b><br><small class="note">${m.reasons.map(esc).join('<br>')}</small></div></div>`).join('')}
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0"><input type="radio" name="pp-dup" value="keep" style="margin-top:3px"><span><b>Keep the existing copy</b><br><small class="note">Don't import this album. Nothing is changed.</small></span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0 14px"><input type="radio" name="pp-dup" value="replace" style="margin-top:3px"><span><b>Replace the existing copy with this one</b><br><small class="note">The existing files are moved to <code>${esc(dup.archive)}</code> (not deleted), then this album is tagged and loaded in Picard.</small></span></label>` : (dup?.indexing ? `<p class="note">The Clean library is still being indexed (${dup.progress?.folders_seen || 0} folders so far), so it couldn't be checked for an existing copy yet.</p>` : '');
     let fpWanted = false; try { fpWanted = localStorage.getItem('fp-generate') === '1'; } catch { /* storage may be blocked */ }
     const bad = plan.pairs.filter((x) => !x.match).length;
     const connected = state.picard.status?.connected;
     openDialog(`<div class="dlg-head"><h3>Tag files for Picard</h3><p>${esc(plan.release.artist)} · ${esc(plan.release.title)}${plan.release.date ? ` (${esc(plan.release.date)})` : ''} · ${plan.release.track_count} tracks on MusicBrainz</p></div>
-      <div class="dlg-body">
+      <div class="dlg-body" style="max-height:calc(100vh - 470px);min-height:140px">
         ${plan.complete ? `<div class="banner ok">${ICON.check.replace('<svg', '<svg width="18" height="18"')}<span>Every file matches a track on the release.</span></div>`
           : `<div class="banner">${ICON.alert.replace('<svg', '<svg width="18" height="18"')}<span>${bad ? `${bad} file${bad === 1 ? '' : 's'} didn't match a track. ` : ''}${plan.unmatched_release_tracks.length ? `${plan.unmatched_release_tracks.length} track${plan.unmatched_release_tracks.length === 1 ? '' : 's'} on the release ${plan.unmatched_release_tracks.length === 1 ? 'has' : 'have'} no file. ` : ''}Picard will still try to match them itself.</span></div>`}
+        ${dupHtml}
         <p class="note">Only MusicBrainz ID tags are added. Picard rewrites everything else when you save.</p>
         <div class="pairs">${plan.pairs.map((x) => `<div class="pair ${x.match ? '' : 'nomatch'}"><span class="l">${x.track_number ? esc(x.track_number.split('/')[0]) + '. ' : ''}${esc(x.title)}</span><span class="arrow">${x.match ? '→' : '✕'}</span><span class="r">${x.match ? `${plan.pairs.some((y) => y.match && y.match.disc > 1) || x.match.disc > 1 ? `${x.match.disc}-` : ''}${x.match.position}. ${esc(x.match.title)} <small>${x.score}%</small>` : 'no matching track'}</span></div>`).join('')}
           ${plan.unmatched_release_tracks.map((t) => `<div class="pair nomatch"><span class="l">(no file)</span><span class="arrow">✕</span><span class="r">${t.disc > 1 ? `${t.disc}-` : ''}${t.position}. ${esc(t.title)}</span></div>`).join('')}
         </div>
       </div>
-      <div class="dlg-body" style="padding-top:0"><label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px" ${fpStatus.available ? '' : 'title="fpcalc isn\'t available in this container"'}><input type="checkbox" id="pp-fp" ${fpStatus.available ? '' : 'disabled'} ${fpStatus.available && fpWanted ? 'checked' : ''} style="margin-top:3px"><span>Generate AcoustID fingerprints first<br><small class="note">Calculated here with fpcalc and written to the files' tags, which Picard keeps. Nothing is looked up or matched, so no file can be re-matched.${fpStatus.available ? '' : ' (Unavailable: fpcalc isn\'t installed in this container.)'}</small></span></label>
+      <div style="padding:8px 24px 2px;border-top:1px solid var(--line-soft)"><label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:10px" ${fpStatus.available ? '' : 'title="fpcalc isn\'t available in this container"'}><input type="checkbox" id="pp-fp" ${fpStatus.available ? '' : 'disabled'} ${fpStatus.available && fpWanted ? 'checked' : ''} style="margin-top:3px"><span>Generate AcoustID fingerprints first<br><small class="note">Calculated here with fpcalc and written to the files' tags, which Picard keeps. Nothing is looked up or matched, so no file can be re-matched.${fpStatus.available ? '' : ' (Unavailable: fpcalc isn\'t installed in this container.)'}</small></span></label>
       <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="pp-clear" checked style="margin-top:3px"><span>Clear Picard's file list first (recommended)<br><small class="note">“Save in Picard” saves <b>every</b> matched file Picard has loaded, so anything left from earlier albums would be re-saved and moved too. Unsaved edits made inside Picard are discarded.</small></span></label></div>
-      <div class="dlg-foot"><button class="btn" id="dlg-cancel">Cancel</button><button class="btn" id="pp-tag" title="Write the IDs but don't touch Picard">Tag files only</button><button class="btn primary" id="pp-send" ${connected ? '' : 'disabled'}>Tag &amp; load in Picard</button></div>`);
+      <div class="dlg-foot"><button class="btn" id="dlg-cancel">Cancel</button><button class="btn" id="pp-tag" title="Write the IDs but don't touch Picard">Tag files only</button><button class="btn primary" id="pp-send" ${connected && !dups.length ? '' : 'disabled'}>Tag &amp; load in Picard</button></div>`);
+    const choice = () => document.querySelector('input[name="pp-dup"]:checked')?.value;
+    $$('input[name="pp-dup"]').forEach((r) => r.addEventListener('change', () => {
+      const send = $('#pp-send'); send.disabled = !connected && choice() !== 'keep';
+      send.textContent = choice() === 'keep' ? 'Keep existing, skip import' : 'Replace & load in Picard';
+    }));
     $('#dlg-cancel').addEventListener('click', closeDialog);
     const run = (tagOnly) => async (e) => {
       const btn = e.currentTarget;
       busy(btn, true, 'Working…');
       try {
+        if (!tagOnly && dups.length) {
+          if (choice() === 'keep') {
+            if (state.batchCtx) await api('POST', '/api/batch/resolve', { path: state.album.path, action: 'skip' }).catch(() => {});
+            closeDialog(); toast('Kept the existing copy. This album was not imported.', 'ok');
+            return;
+          }
+          for (const m of dups) await api('POST', '/api/library/replace', { path: state.album.path, release_mbid: rel, folder: m.folder });
+          toast(`Moved the existing copy to ${dup.archive}.`, 'ok');
+        }
         let fp = null;
         if ($('#pp-fp')?.checked) {
           try { localStorage.setItem('fp-generate', '1'); } catch { /* ignore */ }

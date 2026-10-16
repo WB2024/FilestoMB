@@ -86,7 +86,7 @@ def make_sender(root: Path, mb_client) -> Callable[..., object]:
     return send
 
 
-def register(app: FastAPI, settings: Settings, root: Path, resolve: Callable[[str], Path], mb_client) -> Callable[..., object]:
+def register(app: FastAPI, settings: Settings, root: Path, resolve: Callable[[str], Path], mb_client, on_found: Callable[[Path], None] | None = None) -> Callable[..., object]:
     send = make_sender(root, mb_client)
 
     @app.get("/api/lidarr/status")
@@ -119,6 +119,9 @@ def register(app: FastAPI, settings: Settings, root: Path, resolve: Callable[[st
         dest = Path(settings.picard_dest_root)
         hits = await asyncio.to_thread(locate_moved, dest, time.time() - body.hours * 3600, body.release_mbid)
         folders = sorted({str(h.parent.resolve().relative_to(root)) for h in hits})
+        if on_found is not None:
+            for folder in {h.parent for h in hits}:
+                await asyncio.to_thread(on_found, folder)  # keep the Clean-library index current
         return {"folders": folders}
 
     @app.post("/api/lidarr/send")

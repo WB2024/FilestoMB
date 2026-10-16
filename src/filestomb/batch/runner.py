@@ -119,6 +119,9 @@ class BatchManager:
         # files are confirmed at their destination (used for the Lidarr hand-off).
         # It returns a note to record, or None if it's switched off; raising stops the batch.
         self.after_saved = after_saved
+        # Optional async hook(directory, release_mbid) -> str | None, run just before an album is
+        # tagged: a returned message means "don't import this unattended" (e.g. it's already in the library).
+        self.before_import = None
 
         self.phase = "idle"  # idle | discovering | matching | processing
         self.progress: dict[str, Any] = {}
@@ -349,6 +352,12 @@ class BatchManager:
             self.store.update(rel, status=store.REVIEW, message="No longer a confident match: " + "; ".join(check.problems))
             self._event(f"{rel}: no longer confident, moved to Review", "warn", rel)
             return
+
+        if self.before_import is not None:
+            note = await self.before_import(directory, mbid)
+            if note:
+                self._fail(rel, note)
+                return
 
         # 3. Tag, load, save, verify.
         started = time.time()

@@ -36,6 +36,7 @@ Point it at one album, or at a whole folder of thousands.
 - **Seeded forms, in dependency order.** Label and artist, then release group, then release. Several artists in one credit? Split on any separator you like.
 - **Cover art from everywhere.** Local files, upload, drag and drop, paste, the Cover Art Archive and fanart.tv. A userscript attaches it for you on MusicBrainz's upload page.
 - **Picard, Lidarr, Genre Enforcer.** Optional hand-offs that turn "it's on MusicBrainz" into "it's in my library, tagged and organised".
+- **Duplicate check against your finished library.** Point FilesToMB at your Clean folder and, before importing, it tells you if that release is already there, compares quality (lossless vs lossy, resolution, bitrate, track count) and lets you keep the existing copy or replace it. Replacing *moves* the old files to a `Replaced` folder beside the library; nothing is deleted.
 - **Careful with your files.** Reads are read-only, every write is gated and verified, nothing is ever deleted, and there's an audit log. See [Safety](#safety).
 
 ## Screenshots
@@ -191,6 +192,7 @@ This tool can write to a music library, so it is deliberately cautious:
 - **A required confirmation** gates every batch run, and Picard's file lists are cleared first so its *save* can only ever touch the album being processed.
 - **Verified, not assumed.** After saving, the source folder must be empty of audio and the files must turn up at Picard's destination carrying the right release ID.
 - **The batch stops at the first anomaly.** Nothing is deleted. Every step is written to `batch-audit.log` in `/config`.
+- **Replacing never deletes.** The existing copy is moved (same filesystem, so it's instant and reversible) to a `Replaced/<timestamp>/` folder, and the move is logged in `library-audit.log`. Batch mode never replaces on its own: an album already in the library is flagged as a Problem for you to decide.
 - **Archives** extract into a temporary folder, with zip-slip and symlink checks and no overwriting.
 - Want it truly read-only? Mount your music with `:ro`. The write features switch themselves off.
 

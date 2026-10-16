@@ -359,3 +359,20 @@ async def test_a_failing_hook_stops_the_batch_but_the_album_stays_done(env):
     done = [r for r in env.batch.list("Unmanaged") if r["status"] == store.DONE][0]
     assert "Lidarr: Lidarr said no" in done["message"]
     assert "lidarr_failed" in "\n".join(env.manager.audit_tail())
+
+
+async def test_before_import_hook_holds_an_album_back_without_touching_it_and_the_batch_continues(env):
+    async def guard(directory, mbid):
+        return "Already in your library at X/Y" if "Great Album" in directory.name else None
+
+    env.manager.before_import = guard
+    make_album(env.make_flac, env.unmanaged, "G/Artist One/Great Album")
+    await discover_and_match(env)
+    before = sorted(p.name for p in (env.unmanaged / "G/Artist One/Great Album").iterdir())
+    env.manager.start_processing("Unmanaged", limit=5, clear_picard=True)
+    while env.manager.busy:
+        await asyncio.sleep(0.02)
+    row = env.batch.get("Unmanaged/G/Artist One/Great Album")
+    assert row["status"] == store.PROBLEM and "Already in your library" in row["message"]
+    assert sorted(p.name for p in (env.unmanaged / "G/Artist One/Great Album").iterdir()) == before
+    assert all(mutagen.File(f, easy=True).get("musicbrainz_albumid") is None for f in (env.unmanaged / "G/Artist One/Great Album").glob("*.flac"))

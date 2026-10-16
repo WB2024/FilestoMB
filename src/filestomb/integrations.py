@@ -27,6 +27,10 @@ ENV_NAMES = {
     "enforcer_url": "ENFORCER_URL",
     # "1" = batch mode tells the enforcer about each finished album
     "enforcer_auto": "ENFORCER_AUTO",
+    # The finished ("Clean") library as FilesToMB sees it; defaults to PICARD_DEST_ROOT
+    "clean_library": "CLEAN_LIBRARY_PATH",
+    # Where "replace" moves the old copy; defaults to a "Replaced" folder beside the Clean library
+    "replaced_folder": "REPLACED_FOLDER",
     # Path to the rsgain binary as FilesToMB sees it, e.g. /rsgain/rsgain
     "rsgain_path": "RSGAIN_PATH",
     # Last-used ReplayGain options (remembered between albums)
